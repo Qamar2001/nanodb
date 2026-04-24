@@ -8,7 +8,7 @@ A mini relational database written from scratch in C++ with **zero STL container
 Every data structure (stack, queue, priority queue, hash map, doubly-linked list,
 AVL tree, graph) is hand-rolled over raw pointers and arrays.
 
-> GitHub repo: _(add link after pushing)_
+> GitHub repo: https://github.com/Qamar2001/nanodb
 
 ---
 
