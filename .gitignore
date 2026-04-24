@@ -1,0 +1,20 @@
+# build artefacts
+*.o
+*.exe
+nanodb
+test_runner
+
+# runtime output
+data/
+nanodb_execution.log
+valgrind.log
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# raw TPC-H dumps (if dropped into repo during dev)
+*.tbl
+dbgen/

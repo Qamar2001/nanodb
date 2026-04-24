@@ -1,0 +1,72 @@
+# NanoDB Workload - 50 queries exercising the engine.
+# Lines starting with # are comments. Blank lines ignored.
+
+# --- Simple SELECTs ---
+SELECT * FROM customer WHERE c_custkey == 1
+SELECT c_name, c_acctbal FROM customer WHERE c_custkey == 42
+SELECT c_custkey, c_name FROM customer WHERE c_nationkey == 5
+SELECT * FROM customer WHERE c_acctbal > 8000
+SELECT * FROM customer WHERE c_mktsegment == "BUILDING" AND c_custkey < 10
+SELECT c_name FROM customer WHERE c_custkey < 5
+SELECT c_custkey FROM customer WHERE c_acctbal < 2000
+SELECT * FROM customer WHERE c_nationkey == 0
+SELECT c_name, c_acctbal FROM customer WHERE c_mktsegment == "AUTOMOBILE" AND c_acctbal > 5000
+SELECT * FROM customer WHERE c_custkey == 100 OR c_custkey == 200
+
+# --- Test Case A style: multi-condition WHERE with AND/OR ---
+SELECT * FROM customer WHERE (c_acctbal > 5000 AND c_mktsegment == "BUILDING") OR c_nationkey == 15
+SELECT c_name, c_acctbal FROM customer WHERE c_acctbal > 3000 AND c_acctbal < 7000
+SELECT c_name FROM customer WHERE (c_nationkey == 1 OR c_nationkey == 2) AND c_acctbal > 4000
+SELECT * FROM customer WHERE c_custkey >= 50 AND c_custkey <= 60
+SELECT c_name FROM customer WHERE (c_mktsegment == "HOUSEHOLD" OR c_mktsegment == "FURNITURE") AND c_acctbal > 6000
+
+# --- Test Case F style: nested expressions + arithmetic ---
+SELECT * FROM orders WHERE (o_totalprice * 1.5) > 100000 AND (o_custkey % 2 == 0)
+SELECT * FROM orders WHERE ( (o_totalprice * 1.5) > 100000 AND (o_custkey % 2 == 0) ) OR (o_orderstatus != "O")
+SELECT * FROM orders WHERE o_totalprice > 50000 AND o_orderstatus == "F"
+SELECT o_orderkey, o_totalprice FROM orders WHERE o_custkey == 3 AND o_totalprice > 20000
+SELECT * FROM orders WHERE (o_totalprice + 1000) > 150000
+
+# --- More orders queries ---
+SELECT * FROM orders WHERE o_orderkey == 1
+SELECT o_orderkey FROM orders WHERE o_custkey == 5
+SELECT * FROM orders WHERE o_orderstatus == "P"
+SELECT * FROM orders WHERE o_custkey > 3 AND o_custkey < 8
+SELECT o_totalprice FROM orders WHERE o_orderkey >= 100 AND o_orderkey <= 110
+
+# --- lineitem queries ---
+SELECT * FROM lineitem WHERE l_linekey == 1
+SELECT * FROM lineitem WHERE l_quantity > 40
+SELECT l_linekey, l_extprice FROM lineitem WHERE l_orderkey == 5
+SELECT * FROM lineitem WHERE l_quantity == 25 AND l_extprice > 1000
+SELECT * FROM lineitem WHERE l_extprice > 4000 OR l_quantity > 45
+
+# --- Test Case C: 3-table JOIN ---
+SELECT * FROM customer JOIN orders JOIN lineitem WHERE c_custkey == 1 AND o_custkey == 1 AND l_orderkey == 1
+SELECT c_name, o_totalprice FROM customer JOIN orders WHERE c_custkey == 2 AND o_custkey == 2
+SELECT c_name, o_orderstatus FROM customer JOIN orders WHERE c_custkey == 5 AND o_custkey == 5 AND o_totalprice > 10000
+
+# --- INSERTs ---
+INSERT INTO customer VALUES (30001, "NewCustomerA", 3, 5555.55, "BUILDING")
+INSERT INTO customer VALUES (30002, "NewCustomerB", 7, 3333.33, "AUTOMOBILE")
+INSERT INTO orders VALUES (40001, 1, 75000.50, "O", "2026-05-01")
+INSERT INTO orders VALUES (40002, 2, 120000.00, "F", "2026-05-02")
+INSERT INTO lineitem VALUES (60001, 40001, 10, 2500.00)
+
+# Read back the inserted customer
+SELECT * FROM customer WHERE c_custkey == 30001
+SELECT * FROM customer WHERE c_custkey == 30002
+
+# --- Admin-priority (actual priority handled by PriorityQueue in main) ---
+ADMIN INSERT INTO customer VALUES (99001, "AdminHotfix", 1, 99999.99, "MACHINERY")
+
+# --- More selects ---
+SELECT * FROM customer WHERE c_custkey == 99001
+SELECT c_name FROM customer WHERE c_acctbal > 9500
+SELECT * FROM orders WHERE o_totalprice > 100000 AND o_totalprice < 150000
+SELECT * FROM lineitem WHERE l_orderkey == 10
+SELECT c_custkey, c_name FROM customer WHERE c_nationkey >= 10 AND c_nationkey <= 15
+SELECT * FROM customer WHERE c_acctbal >= 7500 AND c_acctbal <= 8500
+SELECT o_orderkey, o_custkey FROM orders WHERE o_orderstatus == "O" AND o_totalprice > 50000
+SELECT * FROM lineitem WHERE l_quantity >= 30 AND l_extprice > 2000
+SELECT c_name, c_mktsegment FROM customer WHERE c_custkey <= 5
