@@ -6,7 +6,7 @@ echo ============================================
 g++ -std=c++17 -Wall -Wextra -O2 -g -o nanodb ^
     logger.cpp data_types.cpp schema.cpp hash_map.cpp ^
     lru_cache.cpp pager.cpp avl_tree.cpp graph.cpp ^
-    parser.cpp executor.cpp stack.cpp queue.cpp main.cpp
+    parser.cpp executor.cpp stack.cpp queue.cpp tpch_loader.cpp main.cpp
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

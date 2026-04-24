@@ -13,6 +13,7 @@
 #include "data_types.h"
 #include "executor.h"
 #include "graph.h"
+#include "tpch_loader.h"
 #include "logger.h"
 #include "pager.h"
 #include "parser.h"
@@ -224,9 +225,8 @@ int main(int argc, char **argv) {
   Executor *ex = new Executor();
 
   // Build schemas (always) - then either generate fresh data or load from disk.
-  // Defaults are small so the demo + 3-table join completes quickly.
-  // Use env NANODB_SCALE to override (e.g. NANODB_SCALE=100000).
-  int customerN = 500, ordersN = 600, lineitemN = 1000;
+  // Defaults are set to 100,000 records total as per requirements
+  int customerN = 20000, ordersN = 30000, lineitemN = 50000;
   const char *scaleEnv = std::getenv("NANODB_SCALE");
   if (scaleEnv) {
     int s = std::atoi(scaleEnv);
@@ -237,13 +237,21 @@ int main(int argc, char **argv) {
     }
   }
 
-  buildCustomer(ex, customerN);
-  buildOrders(ex, ordersN);
-  buildLineitem(ex, lineitemN);
-
   if (reloadOnly) {
     std::cout << "-- reload mode: loading tables from disk\n";
+    buildCustomer(ex, 0);
+    buildOrders(ex, 0);
+    buildLineitem(ex, 0);
     ex->loadAll();
+  } else {
+    // Attempt to load real TPC-H data from the expected directory
+    bool loaded = loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
+    if (!loaded) {
+      std::cout << "-- [Warning] Could not load TPC-H dataset. Falling back to dummy data.\n";
+      buildCustomer(ex, customerN);
+      buildOrders(ex, ordersN);
+      buildLineitem(ex, lineitemN);
+    }
   }
 
   std::cout << "-- loaded customer(" << ex->getTable("customer")->numRows
