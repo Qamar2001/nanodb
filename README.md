@@ -1,9 +1,5 @@
 # NanoDB — Architecture & Query Optimizer
 
-**Course:** CS-4002 Applied Programming — MS-CS Spring 2026
-**Instructor:** Bushra Fatima
-**Deadline:** 10 May 2026
-
 A mini relational database written from scratch in C++ with **zero STL containers**.
 Every data structure (stack, queue, priority queue, hash map, doubly-linked list,
 AVL tree, graph) is hand-rolled over raw pointers and arrays.
@@ -143,10 +139,6 @@ Operator precedence handled by the Shunting-Yard algorithm.
 
 ---
 
-## Academic Integrity Note
-
-This codebase is my own implementation, written specifically for this course.
-Every module can be explained on the spot during the viva: pointer layout,
 balance-factor cases, hash collision chain walk, union-find path compression,
 shunting-yard operator stack transitions.
 
