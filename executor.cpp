@@ -341,6 +341,28 @@ static void runInsert(Executor* ex, Statement* stmt) {
 void Executor::execute(Statement* stmt) {
     if (!stmt) return;
     if (stmt->kind == STMT_INSERT) { runInsert(this, stmt); return; }
+    if (stmt->kind == STMT_HELP) {
+        std::cout << "\n=== NanoDB Help & Statistics ===\n";
+        std::cout << "Supported Syntax:\n";
+        std::cout << "  - SELECT <cols|*> FROM <t1> [JOIN <t2>] [WHERE <expr>]\n";
+        std::cout << "  - INSERT INTO <t1> VALUES (v1, v2, ...)\n";
+        std::cout << "  - ADMIN INSERT ... (gives priority in queue)\n";
+        std::cout << "  - HELP (this screen)\n\n";
+        std::cout << "Database Catalog:\n";
+        if (entriesCount == 0) {
+            std::cout << "  (no tables registered)\n";
+        } else {
+            for (int i = 0; i < entriesCount; i++) {
+                TableEntry* e = entriesOwned[i];
+                std::cout << "  - " << e->table->name << ": " << e->table->numRows << " rows, "
+                          << e->table->numColumns << " columns";
+                if (e->primaryIndex) std::cout << " [AVL Index Active]";
+                std::cout << "\n";
+            }
+        }
+        std::cout << "=================================\n\n";
+        return;
+    }
     if (stmt->kind != STMT_SELECT) {
         std::cout << "-- unsupported statement kind\n";
         return;

@@ -13,13 +13,13 @@
 #include "data_types.h"
 #include "executor.h"
 #include "graph.h"
-#include "tpch_loader.h"
 #include "logger.h"
 #include "pager.h"
 #include "parser.h"
 #include "queue.h"
 #include "schema.h"
 #include "stack.h"
+#include "tpch_loader.h"
 
 // ----------- TPC-H sample data generation (light) -----------
 static void buildCustomer(Executor *ex, int n) {
@@ -245,9 +245,11 @@ int main(int argc, char **argv) {
     ex->loadAll();
   } else {
     // Attempt to load real TPC-H data from the expected directory
-    bool loaded = loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
+    bool loaded =
+        loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
     if (!loaded) {
-      std::cout << "-- [Warning] Could not load TPC-H dataset. Falling back to dummy data.\n";
+      std::cout << "-- [Warning] Could not load TPC-H dataset. Falling back to "
+                   "dummy data.\n";
       buildCustomer(ex, customerN);
       buildOrders(ex, ordersN);
       buildLineitem(ex, lineitemN);

@@ -106,8 +106,9 @@ The `./nanodb` binary runs all seven rubric test cases in one pass:
 
 ```sql
 SELECT <col_list | *> FROM <tbl> [JOIN <tbl> ...] [WHERE <expr>]
-INSERT INTO <tbl> VALUES (<val>, <val>, ...)
-ADMIN <any of the above>           -- routed through priority queue, runs first
+*   **`INSERT INTO customer VALUES (1, "Name", ...)`** - Standard insert.
+*   **`ADMIN INSERT ...`** - Insert with high priority in the execution queue.
+*   **`HELP`** - Displays supported syntax and current database statistics (table counts, index status).
 ```
 
 **Expressions**: `+ - * / %`, `== != < > <= >=`, `AND`, `OR`, parentheses.

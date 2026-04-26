@@ -2,6 +2,7 @@
 # Lines starting with # are comments. Blank lines ignored.
 
 # --- Simple SELECTs ---
+HELP
 SELECT * FROM customer WHERE c_custkey == 1
 SELECT c_name, c_acctbal FROM customer WHERE c_custkey == 42
 SELECT c_custkey, c_name FROM customer WHERE c_nationkey == 5

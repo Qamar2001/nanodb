@@ -304,6 +304,8 @@ Statement* parseStatement(const std::string& sqlIn) {
                     stmt->insertVals[stmt->insertValCount++] = ts->tokens[i].text;
             }
         }
+    } else if (first == "HELP") {
+        stmt->kind = STMT_HELP;
     }
 
     delete ts;

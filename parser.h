@@ -64,7 +64,7 @@ TokenStream* infixToPostfix(const TokenStream* in, int start, int end);
 std::string printTokens(const TokenStream* ts, int start, int end);
 
 // Statement types the parser produces.
-enum StmtKind { STMT_SELECT, STMT_INSERT, STMT_UNKNOWN };
+enum StmtKind { STMT_SELECT, STMT_INSERT, STMT_HELP, STMT_UNKNOWN };
 
 struct Statement {
     StmtKind kind;
