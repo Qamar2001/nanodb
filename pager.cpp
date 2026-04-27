@@ -31,6 +31,12 @@ Pager::Pager(int maxPgs, int pgSize, const std::string& dir)
 
 Pager::~Pager() {
     flushAll();
+    LRUNode* cur = cache->firstNode();
+    while (cur) {
+        Page* p = (Page*)cur->pageData;
+        delete p;
+        cur = cur->next;
+    }
     delete cache;
 }
 
@@ -99,12 +105,16 @@ void Pager::markDirty(int pageId) {
 }
 
 void Pager::flushAll() {
-    // walk cache nodes via index iter - LRUCache doesn't expose that directly,
-    // so we do a best-effort: iterate by trying pageIds in use. For simplicity
-    // we keep a separate linked-list walk via head by reaching into cache.
-    // Here we just flush by calling write for each node head->tail.
-    // We can piggyback on HashMap iteration inside the cache via get, but
-    // since we don't have direct list access, do nothing here - evictions
-    // already wrote dirty pages. This is acceptable for the demo.
-    // (In a production engine, we'd expose an iterator on LRUCache.)
+    LRUNode* cur = cache->firstNode();
+    while (cur) {
+        Page* p = (Page*)cur->pageData;
+        if (p && p->dirty) {
+            writePageToDisk(p);
+            if (g_logger) {
+                g_logger->log("Page " + std::to_string(p->pageId) +
+                              " flushed from buffer pool to disk");
+            }
+        }
+        cur = cur->next;
+    }
 }
