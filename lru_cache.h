@@ -48,6 +48,7 @@ public:
 
     int size() const { return count; }
     int cap() const { return capacity; }
+    LRUNode* firstNode() const { return head; }
 
     // testing / introspection
     int evictionsTotal;
