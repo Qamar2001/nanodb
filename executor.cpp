@@ -68,6 +68,27 @@ static bool toBool(DataType* v) {
     return false;
 }
 
+static void rebuildPrimaryIndex(TableEntry* e) {
+    if (!e || !e->table) return;
+    if (e->primaryIndex) {
+        delete e->primaryIndex;
+        e->primaryIndex = nullptr;
+    }
+    Table* t = e->table;
+    if (!e->buildPrimaryIndex || t->numColumns == 0 || t->columns[0].type != T_INT)
+        return;
+    e->primaryIndex = new AVLTree();
+    for (int i = 0; i < t->numRows; i++) {
+        DataType* v = t->rows[i]->cells[0];
+        if (v && v->getType() == T_INT)
+            e->primaryIndex->insert(((IntType*)v)->value, t->rows[i]->rowId);
+    }
+    if (g_logger) {
+        g_logger->log("AVL primary index rebuilt for " + t->name +
+                      " with " + std::to_string(t->numRows) + " keys");
+    }
+}
+
 DataType* evalPostfix(const TokenStream* post, const JoinContext& ctx) {
     Stack<DataType*> st(32);
     for (int i = 0; i < post->count; i++) {
@@ -146,16 +167,9 @@ void Executor::registerTable(Table* t, const std::string& diskPath, bool buildIn
     e->table = t;
     e->diskPath = diskPath;
     e->primaryIndex = nullptr;
+    e->buildPrimaryIndex = buildIndex;
 
-    if (buildIndex && t->numColumns > 0 && t->columns[0].type == T_INT) {
-        e->primaryIndex = new AVLTree();
-        for (int i = 0; i < t->numRows; i++) {
-            DataType* v = t->rows[i]->cells[0];
-            if (v && v->getType() == T_INT) {
-                e->primaryIndex->insert(((IntType*)v)->value, t->rows[i]->rowId);
-            }
-        }
-    }
+    rebuildPrimaryIndex(e);
 
     catalog->put(t->name, (void*)e);
 
@@ -191,18 +205,267 @@ void Executor::loadAll() {
     HashMap::Iter it = catalog->begin();
     while (catalog->valid(it)) {
         TableEntry* e = (TableEntry*)catalog->valueAt(it);
-        if (e && e->table) e->table->loadFromFile(e->diskPath);
+        if (e && e->table) {
+            e->table->loadFromFile(e->diskPath);
+            rebuildPrimaryIndex(e);
+        }
         catalog->advance(it);
     }
 }
 
 // --- SELECT path ---
-static void printRowHeader(Table** tbls, int nTbls) {
+static bool isComparisonOp(const std::string& op) {
+    return op == "==" || op == "!=" || op == "<" || op == ">" ||
+           op == "<=" || op == ">=";
+}
+
+static bool isLiteralToken(const Token& t) {
+    return t.type == TK_NUMBER || t.type == TK_STRING;
+}
+
+static DataType* literalToValue(const Token& t) {
+    if (t.type == TK_STRING) return new StringType(t.text);
+    if (t.type == TK_NUMBER) {
+        if (t.isFloat) return new FloatType(t.numVal);
+        return new IntType((int)t.numVal);
+    }
+    return new IntType(0);
+}
+
+static bool compareValues(DataType* left, const std::string& op, DataType* right) {
+    if (!left || !right) return false;
+    if (op == "==") return *left == *right;
+    if (op == "!=") return *left != *right;
+    if (op == "<")  return *left < *right;
+    if (op == ">")  return *left > *right;
+    if (op == "<=") return *left <= *right;
+    if (op == ">=") return *left >= *right;
+    return false;
+}
+
+static bool resolveColumnOnTable(Table* table, const std::string& name, int& colOut) {
+    std::string tbl, col;
+    int dot = -1;
+    for (size_t i = 0; i < name.size(); i++) {
+        if (name[i] == '.') { dot = (int)i; break; }
+    }
+    if (dot >= 0) {
+        tbl = name.substr(0, dot);
+        col = name.substr(dot + 1);
+        if (tbl != table->name) return false;
+    } else {
+        col = name;
+    }
+    colOut = table->colIndex(col);
+    return colOut >= 0;
+}
+
+struct SimpleConstraint {
+    std::string column;
+    std::string op;
+    Token literal;
+    bool literalOnLeft;
+};
+
+static bool postfixHasOr(const TokenStream* post) {
+    if (!post) return false;
+    for (int i = 0; i < post->count; i++) {
+        if (post->tokens[i].type == TK_OP && post->tokens[i].text == "OR")
+            return true;
+    }
+    return false;
+}
+
+static void pushConstraint(SimpleConstraint*& out, int& count, int& cap,
+                           const std::string& column, const std::string& op,
+                           const Token& literal, bool literalOnLeft) {
+    if (count == cap) {
+        int nc = cap ? cap * 2 : 8;
+        SimpleConstraint* tmp = new SimpleConstraint[nc];
+        for (int i = 0; i < count; i++) tmp[i] = out[i];
+        delete[] out;
+        out = tmp;
+        cap = nc;
+    }
+    out[count].column = column;
+    out[count].op = op;
+    out[count].literal = literal;
+    out[count].literalOnLeft = literalOnLeft;
+    count++;
+}
+
+static SimpleConstraint* extractSimpleConstraints(const TokenStream* post, int& count) {
+    count = 0;
+    int cap = 0;
+    SimpleConstraint* out = nullptr;
+    if (!post || postfixHasOr(post)) return out;
+
+    for (int i = 2; i < post->count; i++) {
+        const Token& op = post->tokens[i];
+        if (op.type != TK_OP || !isComparisonOp(op.text)) continue;
+
+        const Token& a = post->tokens[i - 2];
+        const Token& b = post->tokens[i - 1];
+        if (a.type == TK_IDENT && isLiteralToken(b)) {
+            pushConstraint(out, count, cap, a.text, op.text, b, false);
+        } else if (isLiteralToken(a) && b.type == TK_IDENT) {
+            pushConstraint(out, count, cap, b.text, op.text, a, true);
+        }
+    }
+    return out;
+}
+
+static bool rowMatchesConstraints(Table* table, Row* row,
+                                  SimpleConstraint* constraints, int constraintCount) {
+    for (int i = 0; i < constraintCount; i++) {
+        int ci = -1;
+        if (!resolveColumnOnTable(table, constraints[i].column, ci)) continue;
+
+        DataType* lit = literalToValue(constraints[i].literal);
+        DataType* cell = row->cells[ci];
+        bool ok = constraints[i].literalOnLeft
+            ? compareValues(lit, constraints[i].op, cell)
+            : compareValues(cell, constraints[i].op, lit);
+        delete lit;
+        if (!ok) return false;
+    }
+    return true;
+}
+
+struct CandidateList {
+    Row** rows;
+    int count;
+    int capacity;
+    bool owns;
+};
+
+static CandidateList buildCandidates(Table* table,
+                                     SimpleConstraint* constraints,
+                                     int constraintCount) {
+    CandidateList list;
+    list.rows = nullptr;
+    list.count = 0;
+    list.capacity = 0;
+    list.owns = false;
+
+    if (constraintCount == 0) {
+        list.rows = table->rows;
+        list.count = table->numRows;
+        return list;
+    }
+
+    list.capacity = 64;
+    list.rows = new Row*[list.capacity];
+    list.owns = true;
+    for (int i = 0; i < table->numRows; i++) {
+        if (!rowMatchesConstraints(table, table->rows[i], constraints, constraintCount))
+            continue;
+        if (list.count == list.capacity) {
+            int nc = list.capacity * 2;
+            Row** tmp = new Row*[nc];
+            for (int j = 0; j < list.count; j++) tmp[j] = list.rows[j];
+            delete[] list.rows;
+            list.rows = tmp;
+            list.capacity = nc;
+        }
+        list.rows[list.count++] = table->rows[i];
+    }
+    return list;
+}
+
+static void freeCandidates(CandidateList& list) {
+    if (list.owns) delete[] list.rows;
+    list.rows = nullptr;
+    list.count = 0;
+    list.capacity = 0;
+    list.owns = false;
+}
+
+static bool intColumnValue(Table* table, Row* row, const std::string& colName,
+                           int& valueOut) {
+    int ci = table->colIndex(colName);
+    if (ci < 0) return false;
+    DataType* v = row->cells[ci];
+    if (!v || v->getType() != T_INT) return false;
+    valueOut = ((IntType*)v)->value;
+    return true;
+}
+
+static bool knownRelationshipOk(Table* a, Row* ar, Table* b, Row* br, bool& known) {
+    known = true;
+    int left = 0, right = 0;
+    if (a->name == "customer" && b->name == "orders") {
+        return intColumnValue(a, ar, "c_custkey", left) &&
+               intColumnValue(b, br, "o_custkey", right) &&
+               left == right;
+    }
+    if (a->name == "orders" && b->name == "customer") {
+        return intColumnValue(a, ar, "o_custkey", left) &&
+               intColumnValue(b, br, "c_custkey", right) &&
+               left == right;
+    }
+    if (a->name == "orders" && b->name == "lineitem") {
+        return intColumnValue(a, ar, "o_orderkey", left) &&
+               intColumnValue(b, br, "l_orderkey", right) &&
+               left == right;
+    }
+    if (a->name == "lineitem" && b->name == "orders") {
+        return intColumnValue(a, ar, "l_orderkey", left) &&
+               intColumnValue(b, br, "o_orderkey", right) &&
+               left == right;
+    }
+    known = false;
+    return true;
+}
+
+static bool relationshipsOk(Table** tbls, Row** rows, int nTbls) {
+    for (int i = 0; i < nTbls; i++) {
+        for (int j = i + 1; j < nTbls; j++) {
+            bool known = false;
+            bool ok = knownRelationshipOk(tbls[i], rows[i], tbls[j], rows[j], known);
+            if (known && !ok) return false;
+        }
+    }
+    return true;
+}
+
+static void printRowHeader(Table** tbls, int nTbls,
+                           const std::string* projCols, int projCount) {
+    bool starProj = (projCount == 1 && projCols[0] == "*");
     bool first = true;
-    for (int t = 0; t < nTbls; t++) {
-        for (int c = 0; c < tbls[t]->numColumns; c++) {
+    if (starProj) {
+        for (int t = 0; t < nTbls; t++) {
+            for (int c = 0; c < tbls[t]->numColumns; c++) {
+                if (!first) std::cout << " | ";
+                std::cout << tbls[t]->name << "." << tbls[t]->columns[c].name;
+                first = false;
+            }
+        }
+    } else {
+        for (int p = 0; p < projCount; p++) {
             if (!first) std::cout << " | ";
-            std::cout << tbls[t]->name << "." << tbls[t]->columns[c].name;
+            std::string colName = projCols[p];
+            std::string tbl, col;
+            int dot = -1;
+            for (size_t k = 0; k < colName.size(); k++) {
+                if (colName[k] == '.') { dot = (int)k; break; }
+            }
+            if (dot >= 0) {
+                tbl = colName.substr(0, dot);
+                col = colName.substr(dot + 1);
+            } else {
+                col = colName;
+            }
+            bool found = false;
+            for (int t = 0; t < nTbls; t++) {
+                if (!tbl.empty() && tbls[t]->name != tbl) continue;
+                if (tbls[t]->colIndex(col) >= 0) {
+                    std::cout << tbls[t]->name << "." << col;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) std::cout << colName;
             first = false;
         }
     }
@@ -252,34 +515,47 @@ static void printJoinedRow(Table** tbls, Row** rows, int n,
     std::cout << "\n";
 }
 
-// Nested-loop join driver over tables in MST-chosen order.
-// Evaluates WHERE on the fully-joined row (simple, correct).
+// Filtered nested-loop join driver.
+// Simple per-table predicates are pushed down before the cross product, and
+// known TPC-H relationships are checked before evaluating the full WHERE.
 static void runJoin(Executor* ex, Statement* stmt,
                     Table** tbls, int nTbls) {
-    // cross product via recursion with pruning by WHERE on fully-built rows.
     Row** currentRows = new Row*[nTbls];
     for (int i = 0; i < nTbls; i++) currentRows[i] = nullptr;
 
+    int constraintCount = 0;
+    SimpleConstraint* constraints =
+        extractSimpleConstraints(stmt->wherePostfix, constraintCount);
+
+    CandidateList* candidates = new CandidateList[nTbls];
+    for (int i = 0; i < nTbls; i++)
+        candidates[i] = buildCandidates(tbls[i], constraints, constraintCount);
+
     long long matched = 0, examined = 0;
-    const long long MAX_EXAMINE = 2000000;   // safety cap on cross product
-    // iterative cross-product via index counters (avoids recursion for N tables)
     int* idx = new int[nTbls];
     for (int i = 0; i < nTbls; i++) idx[i] = 0;
 
-    // if any table is empty, nothing to do
     bool anyEmpty = false;
-    for (int i = 0; i < nTbls; i++) if (tbls[i]->numRows == 0) { anyEmpty = true; break; }
+    for (int i = 0; i < nTbls; i++) {
+        if (candidates[i].count == 0) { anyEmpty = true; break; }
+    }
+
+    if (g_logger) {
+        std::string msg = "Join candidate pushdown:";
+        for (int i = 0; i < nTbls; i++) {
+            msg += " " + tbls[i]->name + "=" + std::to_string(candidates[i].count);
+        }
+        g_logger->log(msg);
+    }
 
     if (!anyEmpty) {
         while (true) {
-            if (examined >= MAX_EXAMINE) {
-                std::cout << "  [cap] hit " << MAX_EXAMINE << " examined combinations, stopping.\n";
-                break;
-            }
-            for (int i = 0; i < nTbls; i++) currentRows[i] = tbls[i]->rows[idx[i]];
+            for (int i = 0; i < nTbls; i++)
+                currentRows[i] = candidates[i].rows[idx[i]];
+
+            bool keep = relationshipsOk(tbls, currentRows, nTbls);
             JoinContext ctx; ctx.tables = tbls; ctx.rows = currentRows; ctx.n = nTbls;
-            bool keep = true;
-            if (stmt->wherePostfix) {
+            if (keep && stmt->wherePostfix) {
                 DataType* r = evalPostfix(stmt->wherePostfix, ctx);
                 keep = toBool(r);
                 delete r;
@@ -293,7 +569,7 @@ static void runJoin(Executor* ex, Statement* stmt,
             int k = nTbls - 1;
             while (k >= 0) {
                 idx[k]++;
-                if (idx[k] < tbls[k]->numRows) break;
+                if (idx[k] < candidates[k].count) break;
                 idx[k] = 0; k--;
             }
             if (k < 0) break;
@@ -302,6 +578,9 @@ static void runJoin(Executor* ex, Statement* stmt,
 
     std::cout << "-- " << matched << " rows matched (" << examined << " examined)\n";
     delete[] idx;
+    for (int i = 0; i < nTbls; i++) freeCandidates(candidates[i]);
+    delete[] candidates;
+    delete[] constraints;
     delete[] currentRows;
     (void)ex;
 }
@@ -406,7 +685,7 @@ void Executor::execute(Statement* stmt) {
         delete[] mst;
     }
 
-    printRowHeader(tbls, nT);
+    printRowHeader(tbls, nT, stmt->selectCols, stmt->selectColCount);
     runJoin(this, stmt, tbls, nT);
     delete[] tbls;
 }

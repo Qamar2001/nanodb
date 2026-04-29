@@ -14,6 +14,7 @@ struct TableEntry {
     Table* table;
     std::string diskPath;
     AVLTree* primaryIndex;   // index on first column (assumed integer key)
+    bool buildPrimaryIndex;
 };
 
 class Executor {
