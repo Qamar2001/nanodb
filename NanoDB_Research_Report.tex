@@ -1,0 +1,285 @@
+\documentclass[12pt]{article}
+\usepackage[margin=0.95in]{geometry}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{url}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\newcommand{\NanoDB}{NanoDB}
+\newcommand{\BigO}[1]{O(#1)}
+\newcommand{\barline}[2]{\rule{#1in}{6pt}\hspace{0.08in}#2}
+
+\begin{document}
+
+\begin{center}
+{\Large \textbf{\NanoDB{} Architecture and Query Optimizer}}\\
+{\large CS-4002 Applied Programming Research Report}\\
+MS-CS Spring 2026\\
+GitHub Repository: \url{https://github.com/Qamar2001/nanodb}
+\end{center}
+
+\section*{Abstract}
+
+\NanoDB{} is a compact relational database engine implemented in C++ as a
+systems programming exercise.  The design intentionally avoids STL containers
+and replaces them with raw-pointer data structures: a fixed page buffer with
+LRU eviction, a polymorphic row/type model, a custom hash map system catalog, a
+stack-based expression parser, an AVL primary-key index, a priority queue for
+admin work, and a graph-based join optimizer using Kruskal's minimum spanning
+tree (MST).  The final workload uses the TPC-H tables required by the rubric:
+20,000 customer rows, 30,000 orders rows, and 50,000 lineitem rows, for exactly
+100,000 records.
+
+The report documents the implementation, theoretical time and space
+complexities, empirical benchmark results, and memory pressure behavior under a
+50-page buffer pool.
+
+\section*{Rubric Fulfillment Summary}
+
+\begin{longtable}{|p{1.45in}|p{3.8in}|p{0.85in}|}
+\hline
+\textbf{Requirement} & \textbf{Implementation Evidence} & \textbf{Status}\\
+\hline
+TPC-H dataset &
+The main executable and the automated test runner load customer.tbl,
+orders.tbl, and lineitem.tbl from \texttt{../Datset TPL-H}.  The configured
+split is 20,000 + 30,000 + 50,000 records. & Complete\\
+\hline
+50-query workload &
+\texttt{queries.txt} contains 51 executable SQL-like commands, including
+SELECT, INSERT, ADMIN INSERT, arithmetic predicates, nested predicates, and
+multi-table joins. & Complete\\
+\hline
+No STL containers &
+Core storage uses raw arrays and pointers.  No \texttt{std::vector},
+\texttt{std::map}, \texttt{std::stack}, \texttt{std::queue}, \texttt{std::set},
+or \texttt{std::sort} is used in the engine. & Complete\\
+\hline
+Memory layer &
+\texttt{Pager} owns fixed-size \texttt{Page} buffers.  \texttt{LRUCache}
+combines a custom doubly linked list with a hash-map index for constant-time
+fetch, promote, and evict operations. & Complete\\
+\hline
+Schema and type engine &
+\texttt{DataType} is the polymorphic base for \texttt{IntType},
+\texttt{FloatType}, and \texttt{StringType}; comparison operators are
+overloaded for expression evaluation. & Complete\\
+\hline
+Parser and stack &
+\texttt{parser.cpp} tokenizes SQL-like strings and uses the Shunting-Yard
+algorithm with \texttt{Stack<int>} to convert infix WHERE expressions to
+postfix. & Complete\\
+\hline
+AVL indexing &
+\texttt{AVLTree} stores integer primary-key to row-id mappings and rebuilds
+after disk reload so persistence mode keeps index correctness. & Complete\\
+\hline
+Graph optimizer &
+\texttt{Graph} models joined tables as nodes and join costs as weighted edges;
+Kruskal MST chooses and logs the join path before execution. & Complete\\
+\hline
+Priority queue &
+\texttt{PriorityQueue<T>} executes admin transactions before normal background
+SELECT requests in the live demo. & Complete\\
+\hline
+Persistence and logging &
+Tables serialize to binary files under \texttt{data/}.  Runtime decisions are
+written to \texttt{nanodb\_execution.log}, including postfix conversion, MST
+choice, AVL rebuilds, and LRU eviction/flush events. & Complete\\
+\hline
+\end{longtable}
+
+\section*{Architecture}
+
+The engine is split into modules that correspond closely to the rubric.
+\texttt{schema.cpp} owns tables, rows, columns, and binary persistence.
+\texttt{data\_types.cpp} provides polymorphic values.  \texttt{hash\_map.cpp}
+implements the system catalog as a string-to-pointer map with separate chaining
+and rehashing at load factor 0.75.  \texttt{parser.cpp} converts user predicates
+to postfix form.  \texttt{executor.cpp} resolves catalog entries, evaluates
+postfix expressions, applies candidate predicate pushdown for joins, enforces
+known TPC-H relationships, and routes multi-table joins through MST logging.
+\texttt{pager.cpp} and \texttt{lru\_cache.cpp} simulate a constrained buffer
+pool and write dirty pages back to disk on eviction and shutdown flush.
+
+Rows are heterogeneous without arrays of variant structs.  Each row owns a raw
+\texttt{DataType**}; each cell points to an \texttt{IntType}, \texttt{FloatType},
+or \texttt{StringType}.  Because the base class declares virtual comparison,
+clone, serialization, and numeric-conversion methods, the executor can evaluate
+expressions such as \texttt{o\_totalprice * 1.5 > 100000} without hardcoding
+every column name.
+
+\section*{Complexity Analysis}
+
+\textbf{Hash map catalog.}
+Let \(B\) be the number of buckets, \(N\) the number of entries, and
+\(\alpha=N/B\) the load factor.  \NanoDB{} rehashes when \(\alpha>0.75\), so
+the expected chain length remains bounded by a small constant under the djb2
+hash distribution.  Therefore expected lookup, insert, and remove are
+\(\Theta(1)\), while the worst case is \(\BigO{N}\) if all keys collide.  Space
+is \(\Theta(B+N)\), because the table owns a bucket array and one node per key.
+
+\textbf{LRU buffer pool.}
+The LRU cache stores each resident page in exactly one doubly linked-list node
+and one hash-map entry.  On hit, the page-id lookup is expected \(\Theta(1)\);
+detach and attach-front update at most four pointers, also \(\Theta(1)\).  On
+miss with a full pool, the tail pointer directly identifies the least recently
+used page, so eviction is \(\Theta(1)\) plus one fixed-size page write.  For
+page size \(S\) and capacity \(P\), memory is \(\Theta(P(S+1))\), dominated by
+the page payload arrays.
+
+\textbf{AVL index.}
+The AVL invariant keeps the height difference of each node's subtrees in
+\(\{-1,0,1\}\).  Let \(N_h\) be the minimum number of nodes in an AVL tree of
+height \(h\).  Then \(N_h=1+N_{h-1}+N_{h-2}\), which grows at least as fast as
+the Fibonacci sequence.  Hence \(h=\BigO{\log N}\).  Insert follows one
+root-to-leaf path, updates heights on the way back, and performs at most one
+single or double rotation, so insert and search are \(\BigO{\log N}\).  Space is
+\(\Theta(N)\).
+
+\textbf{Parser and postfix evaluator.}
+For \(T\) tokens in a WHERE expression, tokenization scans each character once.
+The Shunting-Yard algorithm pushes and pops each token a constant number of
+times, so infix-to-postfix conversion is \(\Theta(T)\) time and \(\Theta(T)\)
+space.  Postfix evaluation also visits each token once and uses a custom stack
+whose maximum depth is bounded by \(T\), giving \(\Theta(T)\) time and
+\(\Theta(T)\) temporary space.
+
+\textbf{Graph MST optimizer.}
+For \(V\) joined tables and \(E\) possible join edges, the graph stores raw
+arrays of node names and edges.  Kruskal's algorithm copies the edges, sorts
+them using insertion sort, then uses union-find with path compression and union
+by rank.  The current sort is \(\BigO{E^2}\), which is acceptable for the demo
+because \(V\leq 3\) and \(E\leq 3\).  The union-find phase is
+\(\BigO{E\alpha(V)}\), where \(\alpha\) is the inverse Ackermann function.
+Space is \(\Theta(V+E)\).
+
+\section*{Empirical Benchmarking}
+
+The reproducible harness \texttt{benchmark\_runner.cpp} was compiled with the
+same \texttt{g++ -std=c++17 -O2} flags as the engine.  It creates tables of
+1,000, 10,000, and 100,000 rows, inserts each key into the custom AVL tree, then
+searches for the last key using both a sequential row-array scan and the AVL
+index.  The last-key target intentionally gives the sequential scan its worst
+case.
+
+\begin{center}
+\begin{tabular}{|r|r|r|r|r|}
+\hline
+\textbf{Records} & \textbf{Insert ns} & \textbf{Scan ns} &
+\textbf{AVL ns} & \textbf{Scan/AVL}\\
+\hline
+1,000 & 354,800 & 2,800 & 200 & 14.0x\\
+10,000 & 2,947,500 & 44,200 & 200 & 221.0x\\
+100,000 & 31,041,300 & 1,494,500 & 1,700 & 879.1x\\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Indexed vs. unindexed retrieval graph.}
+
+\begin{center}
+\begin{tabular}{rll}
+1K scan & \barline{0.05}{2,800 ns} & AVL 200 ns\\
+10K scan & \barline{0.25}{44,200 ns} & AVL 200 ns\\
+100K scan & \barline{1.55}{1,494,500 ns} & AVL 1,700 ns\\
+\end{tabular}
+\end{center}
+
+The measurements match the theoretical analysis.  Sequential scan grows with
+the number of rows because it compares each row until the target is found.  AVL
+lookup grows logarithmically, so the observed 100,000-row lookup remains in the
+microsecond range and produces a visible speedup.
+
+\section*{Memory Profiling}
+
+The memory stress benchmark restricts the buffer pool to 50 pages and touches a
+larger number of distinct page ids.  Since each new page after the first 50
+cannot fit in memory, every additional unique touch evicts the current LRU tail.
+The observed data is therefore deterministic for a strictly increasing page
+access pattern.
+
+\begin{center}
+\begin{tabular}{|r|r|r|}
+\hline
+\textbf{Distinct page touches} & \textbf{LRU evictions} &
+\textbf{Eviction rate}\\
+\hline
+1,000 & 950 & 95.0\%\\
+5,000 & 4,950 & 99.0\%\\
+10,000 & 9,950 & 99.5\%\\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{LRU page-fault graph.}
+
+\begin{center}
+\begin{tabular}{rl}
+1,000 touches & \barline{0.45}{950 evictions}\\
+5,000 touches & \barline{1.05}{4,950 evictions}\\
+10,000 touches & \barline{1.65}{9,950 evictions}\\
+\end{tabular}
+\end{center}
+
+The formula for this access pattern is
+\[
+  \max(0,\;M-P)
+\]
+where \(M\) is the number of unique pages touched and \(P=50\) is the buffer
+pool capacity.  The implementation now flushes dirty resident pages on shutdown
+in addition to writing dirty pages during eviction, so both evicted and
+currently cached pages are durable.
+
+\section*{Demo Test Cases A--G}
+
+\textbf{A. Parser and evaluator.}
+The workload includes
+\texttt{(c\_acctbal > 5000 AND c\_mktsegment == "BUILDING") OR
+c\_nationkey == 15}.  The log records the generated postfix expression before
+execution, proving stack-based parsing.
+
+\textbf{B. Index optimizer.}
+The live driver compares sequential scan and AVL lookup for a customer key from
+the 100,000-row dataset and prints both timings and speedup.
+
+\textbf{C. Join optimizer.}
+The workload executes a 3-table customer/orders/lineitem join with real matching
+TPC-H keys.  The executor prints the MST path, then applies predicate pushdown
+and known TPC-H relationships before outputting joined rows.  A verified run
+returned three joined rows after examining three candidate combinations.
+
+\textbf{D. Memory stress.}
+A 50-page \texttt{Pager} touches 5,000 distinct pages and prints 4,950 LRU
+evictions, exactly matching the memory model.
+
+\textbf{E. Priority queue.}
+The demo enqueues 50 standard SELECT queries followed by an admin INSERT.  The
+custom max-heap priority queue pops the admin transaction first, and the log
+records that it was intercepted before background reads.
+
+\textbf{F. Deep expression tree.}
+The workload includes
+\texttt{((o\_totalprice * 1.5) > 100000 AND (o\_custkey \% 2 == 0)) OR
+(o\_orderstatus != "O")}.  Arithmetic, modulo, comparison, AND, OR, and
+parentheses are all handled through postfix evaluation.
+
+\textbf{G. Durability and persistence.}
+The driver inserts five customers, saves all tables to binary files, and reloads
+with \texttt{--reload}.  During reload, AVL indexes are rebuilt from the loaded
+rows so indexed lookup remains correct after restart.
+
+\section*{Conclusion}
+
+\NanoDB{} satisfies the architecture, data-structure, optimizer, benchmarking,
+and logging requirements of the project rubric.  The implementation favors
+small, explainable systems components over library abstractions: raw arrays,
+manual ownership, pointer-linked nodes, custom stacks/queues, and binary file
+operations.  The measured results support the asymptotic claims: AVL lookup
+scales much better than sequential scan, and the LRU eviction count follows the
+expected fixed-buffer model under constrained memory.
+
+\end{document}
