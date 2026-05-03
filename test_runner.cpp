@@ -14,6 +14,7 @@
 #include "logger.h"
 #include "schema.h"
 #include "data_types.h"
+#include "tpch_loader.h"
 #include <fstream>
 #include <cstring>
 #include <cstdlib>
@@ -82,9 +83,21 @@ int main() {
     g_logger->section("test_runner start");
 
     Executor ex;
-    ex.registerTable(makeCustomer(2000),  "data/customer.bin", true);
-    ex.registerTable(makeOrders(3000),    "data/orders.bin",   true);
-    ex.registerTable(makeLineitem(5000),  "data/lineitem.bin", true);
+    const int customerN = 20000;
+    const int ordersN = 30000;
+    const int lineitemN = 50000;
+
+    bool loaded = loadTpchData(&ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
+    if (!loaded) {
+        std::cout << "-- [Warning] Could not load TPC-H dataset. "
+                  << "Using 100,000 generated rows for test_runner.\n";
+        ex.registerTable(makeCustomer(customerN),  "data/customer.bin", true);
+        ex.registerTable(makeOrders(ordersN),      "data/orders.bin",   true);
+        ex.registerTable(makeLineitem(lineitemN),  "data/lineitem.bin", true);
+    }
+    std::cout << "-- test_runner loaded customer(" << ex.getTable("customer")->numRows
+              << "), orders(" << ex.getTable("orders")->numRows << "), lineitem("
+              << ex.getTable("lineitem")->numRows << ")\n";
 
     std::ifstream in("queries.txt");
     if (!in.is_open()) {

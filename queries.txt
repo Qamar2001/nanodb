@@ -43,9 +43,9 @@ SELECT * FROM lineitem WHERE l_quantity == 25 AND l_extprice > 1000
 SELECT * FROM lineitem WHERE l_extprice > 4000 OR l_quantity > 45
 
 # --- Test Case C: 3-table JOIN ---
-SELECT * FROM customer JOIN orders JOIN lineitem WHERE c_custkey == 1 AND o_custkey == 1 AND l_orderkey == 1
-SELECT c_name, o_totalprice FROM customer JOIN orders WHERE c_custkey == 2 AND o_custkey == 2
-SELECT c_name, o_orderstatus FROM customer JOIN orders WHERE c_custkey == 5 AND o_custkey == 5 AND o_totalprice > 10000
+SELECT * FROM customer JOIN orders JOIN lineitem WHERE c_custkey == 16252 AND o_custkey == 16252 AND o_orderkey == 65 AND l_orderkey == 65
+SELECT c_name, o_totalprice FROM customer JOIN orders WHERE c_custkey == 3373 AND o_custkey == 3373
+SELECT c_name, o_orderstatus FROM customer JOIN orders WHERE c_custkey == 6199 AND o_custkey == 6199 AND o_totalprice > 10000
 
 # --- INSERTs ---
 INSERT INTO customer VALUES (30001, "NewCustomerA", 3, 5555.55, "BUILDING")
