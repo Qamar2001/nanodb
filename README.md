@@ -10,33 +10,48 @@ AVL tree, graph) is hand-rolled over raw pointers and arrays.
 
 ## Build & Run
 
-Requires a C++17 compiler (`g++` / `clang++`) and `make`.
+Requires a C++17 compiler (`g++` / `clang++`).
 
+**On Windows (recommended):**
 ```bash
-make           # builds ./nanodb and ./test_runner
-make run       # fresh run: builds dummy TPC-H data, runs queries.txt, saves to data/
-make reload    # runs ./nanodb --reload (loads previously saved tables from disk)
-make test      # runs the automated test_runner against queries.txt
-make clean     # removes binaries, objects, data/, log
+.\run.bat      # compiles everything and launches the interactive menu
 ```
 
-### First-time demo sequence
-
+**Manual compile:**
 ```bash
-make
-./nanodb                 # Runs all 7 test cases, saves tables to data/
-./nanodb --reload        # Verifies persistence: reads tables back from disk
-cat nanodb_execution.log # Review LRU evictions, postfix conversions, MST decisions
+g++ -std=c++17 -Wall -O2 -o nanodb.exe logger.cpp data_types.cpp schema.cpp hash_map.cpp lru_cache.cpp pager.cpp avl_tree.cpp graph.cpp parser.cpp executor.cpp stack.cpp queue.cpp tpch_loader.cpp main.cpp
+.\nanodb.exe
 ```
 
-### Scaling the dataset
+### Interactive Menu
 
-Default dummy data is small so the 3-table join demo completes quickly.
-To stress-test at larger scale:
+When you launch `nanodb.exe`, you will see an interactive menu:
 
-```bash
-NANODB_SCALE=10 ./nanodb   # 10x larger: 5000 customer / 6000 orders / 10000 lineitem
 ```
+===========================================
+        NanoDB Interactive Shell
+===========================================
+
+--- Main Menu ---
+1. Load TPC-H Dataset (100k records)
+2. Load Dummy Data (Fallback)
+3. Execute Test Suite (queries.txt)
+4. Run Benchmarks (Sequential vs AVL)
+5. Run LRU Cache Stress Test
+6. Run Priority Queue Test
+7. Interactive SQL Shell
+8. Exit
+Select an option:
+```
+
+**Recommended demo sequence:**
+1. Select `1` — Load TPC-H data (20k customers, 30k orders, 50k lineitems).
+2. Select `4` — Watch the AVL index beat sequential scan by ~70x.
+3. Select `5` — Watch 4,950 LRU page evictions handled in O(1).
+4. Select `7` — Type your own live SQL queries!
+5. Select `8` — Data is auto-saved to `data/` on exit.
+
+**Log file:** All operations are recorded in `nanodb_execution.log`.
 
 ---
 
@@ -46,10 +61,12 @@ NANODB_SCALE=10 ./nanodb   # 10x larger: 5000 customer / 6000 orders / 10000 lin
 
 ```
 nanodb/
-├── main.cpp              driver; runs all 7 test cases
+├── main.cpp              interactive CLI menu driver
 ├── test_runner.cpp       minimal harness: loads tables + executes queries.txt
+├── benchmark_runner.cpp  empirical 1K/10K/100K and LRU benchmark harness
 ├── queries.txt           50-query workload file
 ├── Makefile
+├── NanoDB_Research_Report.pdf  5-8 page technical report
 ├── data/                 binary-serialised tables (created on first save)
 ├── nanodb_execution.log  detailed runtime log
 │
@@ -141,4 +158,3 @@ Operator precedence handled by the Shunting-Yard algorithm.
 
 balance-factor cases, hash collision chain walk, union-find path compression,
 shunting-yard operator stack transitions.
-

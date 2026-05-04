@@ -6,14 +6,17 @@ CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -g
 OBJS := logger.o data_types.o schema.o hash_map.o lru_cache.o pager.o \
         avl_tree.o graph.o parser.o executor.o stack.o queue.o tpch_loader.o
 
-.PHONY: all clean run reload test
+.PHONY: all clean run reload test benchmark
 
-all: nanodb test_runner
+all: nanodb test_runner benchmark_runner
 
 nanodb: $(OBJS) main.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 test_runner: $(OBJS) test_runner.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+benchmark_runner: logger.o data_types.o schema.o hash_map.o lru_cache.o pager.o avl_tree.o benchmark_runner.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 %.o: %.cpp
@@ -28,8 +31,11 @@ reload: nanodb
 test: test_runner
 	./test_runner
 
+benchmark: benchmark_runner
+	./benchmark_runner
+
 clean:
-	rm -f *.o nanodb test_runner nanodb_execution.log
+	rm -f *.o nanodb test_runner benchmark_runner nanodb_execution.log
 	rm -rf data
 
 # header deps (basic)
@@ -47,4 +53,5 @@ stack.o: stack.cpp stack.h
 queue.o: queue.cpp queue.h
 main.o: main.cpp
 test_runner.o: test_runner.cpp
+benchmark_runner.o: benchmark_runner.cpp
 tpch_loader.o: tpch_loader.cpp tpch_loader.h data_types.h schema.h logger.h
