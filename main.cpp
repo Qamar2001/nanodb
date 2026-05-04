@@ -217,72 +217,96 @@ static void runWorkload(Executor *ex, const std::string &path) {
 
 // ----------- main -----------
 int main(int argc, char **argv) {
-  bool reloadOnly = (argc > 1 && std::strcmp(argv[1], "--reload") == 0);
-
   initLogger();
   g_logger->section("NanoDB starting");
 
   Executor *ex = new Executor();
-
-  // Build schemas (always) - then either generate fresh data or load from disk.
-  // Defaults are set to 100,000 records total as per requirements
   int customerN = 20000, ordersN = 30000, lineitemN = 50000;
-  const char *scaleEnv = std::getenv("NANODB_SCALE");
-  if (scaleEnv) {
-    int s = std::atoi(scaleEnv);
-    if (s > 0) {
-      customerN = s / 5;
-      ordersN = s * 3 / 10;
-      lineitemN = s / 2;
+
+  bool running = true;
+  bool dataLoaded = false;
+
+  std::cout << "===========================================\n";
+  std::cout << "        NanoDB Interactive Shell\n";
+  std::cout << "===========================================\n";
+
+  while (running) {
+    std::cout << "\n--- Main Menu ---\n";
+    std::cout << "1. Load TPC-H Dataset (100k records)\n";
+    std::cout << "2. Load Dummy Data (Fallback)\n";
+    std::cout << "3. Execute Test Suite (queries.txt)\n";
+    std::cout << "4. Run Benchmarks (Sequential vs AVL)\n";
+    std::cout << "5. Run LRU Cache Stress Test\n";
+    std::cout << "6. Run Priority Queue Test\n";
+    std::cout << "7. Interactive SQL Shell\n";
+    std::cout << "8. Exit\n";
+    std::cout << "Select an option: ";
+
+    std::string choice;
+    if (!std::getline(std::cin, choice)) break;
+
+    if (choice == "1") {
+      if (!dataLoaded) {
+        bool loaded = loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
+        if (loaded) {
+          std::cout << "-- Successfully loaded real TPC-H dataset.\n";
+          dataLoaded = true;
+        } else {
+          std::cout << "-- [Error] Could not load TPC-H dataset from '../Datset TPL-H'.\n";
+        }
+      } else {
+         std::cout << "-- Data already loaded.\n";
+      }
+    } else if (choice == "2") {
+      if (!dataLoaded) {
+        buildCustomer(ex, customerN);
+        buildOrders(ex, ordersN);
+        buildLineitem(ex, lineitemN);
+        std::cout << "-- Loaded dummy data.\n";
+        dataLoaded = true;
+      } else {
+         std::cout << "-- Data already loaded.\n";
+      }
+    } else if (choice == "3") {
+      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else runWorkload(ex, "queries.txt");
+    } else if (choice == "4") {
+      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else demoIndexedVsScan(ex);
+    } else if (choice == "5") {
+      demoLruStress();
+    } else if (choice == "6") {
+      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else demoPriorityQueue(ex);
+    } else if (choice == "7") {
+      if (!dataLoaded) {
+         std::cout << "-- Warning: No data loaded. Some queries may fail.\n";
+      }
+      std::cout << "\n--- Interactive SQL Shell ---\n";
+      std::cout << "Type 'EXIT' or 'QUIT' to return to menu.\n";
+      while (true) {
+        std::cout << "SQL> ";
+        std::string query;
+        if (!std::getline(std::cin, query)) break;
+        if (query.empty()) continue;
+        
+        std::string upperQ = query;
+        for (char& c : upperQ) c = toupper((unsigned char)c);
+        if (upperQ == "EXIT" || upperQ == "QUIT") break;
+        
+        Statement *s = parseStatement(query);
+        ex->execute(s);
+        delete s;
+      }
+    } else if (choice == "8") {
+      running = false;
+    } else {
+      std::cout << "-- Invalid option. Try again.\n";
     }
   }
 
-  if (reloadOnly) {
-    std::cout << "-- reload mode: loading tables from disk\n";
-    buildCustomer(ex, 0);
-    buildOrders(ex, 0);
-    buildLineitem(ex, 0);
-    ex->loadAll();
-  } else {
-    // Attempt to load real TPC-H data from the expected directory
-    bool loaded =
-        loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
-    if (!loaded) {
-      std::cout << "-- [Warning] Could not load TPC-H dataset. Falling back to "
-                   "dummy data.\n";
-      buildCustomer(ex, customerN);
-      buildOrders(ex, ordersN);
-      buildLineitem(ex, lineitemN);
-    }
-  }
-
-  std::cout << "-- loaded customer(" << ex->getTable("customer")->numRows
-            << "), orders(" << ex->getTable("orders")->numRows << "), lineitem("
-            << ex->getTable("lineitem")->numRows << ")\n";
-
-  // Run the workload
-  runWorkload(ex, "queries.txt");
-
-  // Explicit test cases B, D, E (A, C, F, G are covered in queries.txt +
-  // persistence)
-  demoIndexedVsScan(ex);
-  demoLruStress();
-  demoPriorityQueue(ex);
-
-  // persistence test (Test Case G)
-  std::cout << "\n=== Test Case G: Persistence ===\n";
-  // Insert 5 new customers then save to disk
-  for (int i = 0; i < 5; i++) {
-    std::string q = "INSERT INTO customer VALUES (" +
-                    std::to_string(50000 + i) + ", \"NewCust" +
-                    std::to_string(i) + "\", 7, 8888.88, \"BUILDING\")";
-    Statement *s = parseStatement(q);
-    ex->execute(s);
-    delete s;
-  }
+  std::cout << "\nSaving all tables to disk before exit...\n";
   ex->saveAll();
-  std::cout << "  5 new customers inserted and all tables saved to disk.\n";
-  std::cout << "  Re-run with: ./nanodb --reload  to verify they come back.\n";
 
   delete ex;
   g_logger->section("NanoDB shutdown");
