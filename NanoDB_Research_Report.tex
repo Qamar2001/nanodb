@@ -3,17 +3,14 @@
 % ---- Packages ----
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath}
-\usepackage{amssymb}
 \usepackage{array}
 \usepackage{booktabs}
 \usepackage{url}
-\usepackage{hyperref}
-\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
 \usepackage{setspace}
 \usepackage{titlesec}
 \usepackage{parskip}
-\usepackage{microtype}
-\usepackage[natbib=true, style=ieee, sorting=none]{biblatex}
+\usepackage[backend=biber, style=ieee, sorting=none]{biblatex}
 \addbibresource{nanodb_references.bib}
 
 % ---- Formatting ----
@@ -24,14 +21,9 @@
 \titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
 
 \newcommand{\NanoDB}{\textsc{NanoDB}}
-\newcommand{\BigO}[1]{$O(#1)$}
 \newcommand{\code}[1]{\texttt{#1}}
 
 \hypersetup{
-    colorlinks=true,
-    linkcolor=blue,
-    citecolor=blue,
-    urlcolor=blue,
     pdftitle={NanoDB: Design and Implementation of a Custom Relational Database Engine},
     pdfauthor={Qamar Mehmood}
 }
@@ -43,8 +35,7 @@
 % ---- Title Block ----
 \begin{center}
     {\LARGE \textbf{\NanoDB: Design and Implementation of a Custom}}\\[4pt]
-    {\LARGE \textbf{Relational Database Engine with Constraint-Driven}}\\[4pt]
-    {\LARGE \textbf{Data Structures}}\\[16pt]
+    {\LARGE \textbf{Relational Database Engine with Constraint-Driven Data Structures}}\\[16pt]
     {\large Qamar Mehmood}\\
     {\normalsize Roll Number: 26I-7800}\\[4pt]
     {\normalsize CS-4002 Applied Programming \quad $\cdot$ \quad MS-CS Spring 2026}\\
@@ -60,7 +51,7 @@
 % ======================================================
 \begin{abstract}
 \noindent
-Modern relational database management systems such as PostgreSQL and SQLite abstract their internals behind layers of library code, making them practical for production but opaque for learning. This paper presents the design, implementation, and empirical evaluation of \NanoDB, a fully functional mini-RDBMS built from scratch in C++ under a strict prohibition on the C++ Standard Template Library (STL). Every subsystem, from the page-based buffer pool to the query optimizer, was implemented using raw pointers and arrays. The engine loads 100,000 real-world records from the TPC-H decision-support benchmark \cite{tpch2023} across three relational tables, evaluates nested SQL expressions through a Shunting-Yard parser \cite{dijkstra1961} operating on a custom stack, and routes multi-table joins through a Kruskal MST cost optimizer \cite{kruskal1956}. Empirical measurements confirm a 69-fold query acceleration when using the AVL index \cite{avl1962} over a sequential scan at 20,000 records, and the buffer pool successfully managed 4,950 LRU eviction cycles \cite{oneil1993} under a constrained 50-page memory budget without memory corruption. This paper presents the architectural rationale, formal complexity proofs, and measured performance characteristics of each subsystem.
+Building a database from the ground up is one of the most effective ways to understand how data systems actually work beneath the abstractions. This paper documents the design, implementation, and empirical evaluation of \NanoDB, a functional mini-relational database engine written in C++ without using any Standard Template Library (STL) containers. Every component was built by hand: the buffer pool, the LRU cache, the hash map, the AVL index, the SQL expression parser, and the join optimizer. The engine operates on 100,000 real records from the TPC-H benchmark \cite{tpch2023}, evaluates complex WHERE expressions through a Shunting-Yard parser on a custom stack, and routes multi-table joins using a graph-based MST algorithm. In live testing, the AVL tree index was roughly 69 times faster than a sequential scan on 20,000 records, and the buffer pool handled 4,950 LRU evictions correctly under a 50-page memory constraint. This paper covers the reasoning behind each design choice, the mathematical proof of each component's efficiency, and the measured results from the actual running system.
 \end{abstract}
 
 \vspace{8pt}
@@ -70,173 +61,149 @@ Modern relational database management systems such as PostgreSQL and SQLite abst
 % ======================================================
 \section{Introduction}
 
-The gap between \textit{using} a database and \textit{understanding} one is wide. A graduate student who writes complex JOIN queries every day may never stop to consider how the database decides which rows to examine, how a WHERE clause becomes a sequence of operations on stack-allocated temporaries, or why some join orderings are an order of magnitude more expensive than others. The \NanoDB{} project was designed to close that gap.
+There is a meaningful difference between knowing how to use a database and understanding how one actually works. A developer who writes SQL queries daily may never consider what happens inside the engine when that query arrives as a raw string, how the WHERE clause gets decomposed into executable operations, or why joining tables in a different order can change query time from milliseconds to minutes. The \NanoDB{} project was built to close that gap.
 
-The defining constraint of this project is a complete ban on the C++ Standard Template Library. There is no \code{std::vector}, no \code{std::map}, no \code{std::stack}, and no \code{std::sort}. Every data structure must be re-engineered from first principles using raw arrays and pointer arithmetic. While this restriction may seem artificial, it forces a genuine engagement with algorithmic trade-offs that would otherwise remain hidden behind convenient interfaces. When you implement your own doubly-linked list and experience firsthand why \BigO{1} pointer relinking outperforms \BigO{N} array shifting by thousands of microseconds at realistic data scales, the lesson stays with you.
+The project has one defining rule: no STL. There is no \code{std::vector}, no \code{std::map}, no \code{std::stack}, no \code{std::sort}. Every data structure has to be written from scratch with raw arrays and pointers. This constraint is uncomfortable at first but turns out to be a surprisingly effective teaching tool. When you implement your own doubly-linked list and watch it handle thousands of cache evictions in microseconds while an equivalent array implementation would require millions of element shifts, the performance argument stops being abstract and becomes something you have experienced directly.
 
-The engine that emerged from this process is a working relational system. It manages fixed-size memory pages through a custom buffer pool, indexes rows using a height-balanced AVL tree, parses SQL-like expressions using the classical Shunting-Yard algorithm on a hand-written stack, routes multi-table joins through a graph-based cost optimizer, serializes data to disk through raw binary I/O, and schedules high-priority administrative queries ahead of background reads through a binary max-heap. The dataset is 100,000 records from the TPC-H benchmark, the same industry standard used to evaluate commercial database systems \cite{tpch2023}.
-
-This paper is organized as follows. Section 2 surveys the related academic work that underpins the design. Section 3 describes the overall system architecture. Sections 4 through 8 present each subsystem in detail with formal complexity analysis. Section 9 presents empirical benchmark results. Section 10 concludes with a reflection on what the implementation revealed.
+The resulting system, \NanoDB, is a working relational engine. It reads records from TPC-H benchmark files \cite{tpch2023}, stores them in a paged binary format on disk, indexes primary keys using a self-balancing AVL tree \cite{cormen2022}, evaluates SQL WHERE clauses using the Shunting-Yard algorithm on a custom stack, routes multi-table joins through a graph-based cost optimizer, and handles high-priority administrative queries through a binary max-heap scheduler. This paper documents how each of those pieces was designed, proves their complexity mathematically, and shows the empirical results from running them.
 
 % ======================================================
 \section{Related Work}
 
-The subsystems implemented in \NanoDB{} draw from several decades of foundational research in systems and algorithms.
+\subsection{Buffer Pool and Memory Management}
 
-\subsection{Buffer Management}
-The idea of managing a fixed-size page pool in main memory and evicting pages to disk as needed is central to database systems design, as described extensively in Ramakrishnan and Gehrke \cite{ramakrishnan2003}. The Least Recently Used (LRU) replacement policy, used here, was analyzed in depth by O'Neil et al.\ \cite{oneil1993} in the context of their LRU-K algorithm, which extends basic LRU by tracking the $K$-th most recent access rather than just the most recent. \NanoDB{} implements the simpler LRU-1 variant, which is the standard textbook policy.
+Managing a fixed pool of memory pages and evicting the least recently used page to disk when the pool fills up is a foundational technique in database engineering. The CMU research group's 2022 CIDR paper by Crotty et al.\ \cite{crotty2022} provides a valuable modern perspective on this, arguing against the common shortcut of using OS memory-mapped I/O and demonstrating that an explicitly managed buffer pool gives the application far more control over what happens when memory runs short. Their findings reinforce the approach taken in \NanoDB, where every page eviction is handled deliberately through a doubly-linked list and hash map rather than delegated to the OS.
 
-\subsection{Balanced Tree Indexing}
-The AVL tree was introduced by Adelson-Velsky and Landis in 1962 \cite{avl1962}. It was the first self-balancing binary search tree and remains one of the most pedagogically clear, with an explicit height-difference invariant of at most one between any node's left and right subtrees. Alternative structures such as red-black trees (used in \code{std::map}) and B+ trees (used in most commercial databases) trade some simplicity for better cache behavior. For this project, the AVL tree's clear invariant and well-understood rotation cases make it a natural choice. The general treatment of balanced BSTs and their complexity proofs appears in Cormen et al.\ \cite{cormen2009}.
+Neumann and Freitag \cite{neumann2020} showed in the Umbra system that a disk-based engine does not have to sacrifice performance. Their design, which achieves in-memory-level query speeds while still using a page-based storage layer, demonstrates that the buffer pool architecture is not fundamentally limiting. It just has to be implemented carefully.
 
-\subsection{Expression Parsing}
-The Shunting-Yard algorithm was described by Dijkstra in 1961 \cite{dijkstra1961} as a method for converting mathematical expressions from infix to postfix (Reverse Polish Notation) notation. The resulting postfix stream can be evaluated in a single linear pass using a stack, with no backtracking or lookahead. The algorithm handles operator precedence and left-to-right associativity through simple comparisons of precedence values on the operator stack. \NanoDB{} extends the algorithm to handle logical operators AND and OR alongside arithmetic and comparison operators.
+\subsection{Indexing Structures}
+
+The AVL tree, the indexing structure used in \NanoDB, has been covered extensively in algorithms literature \cite{cormen2022}. The key property is a strict height invariant: for any node, the heights of its two subtrees can differ by at most one. This keeps the tree height at $O(\log N)$ and guarantees that lookups never degrade no matter what order data is inserted.
+
+More recent work has explored whether classical tree-based indexes can be replaced entirely by learned models. Ding et al.\ \cite{ding2020} introduced ALEX at SIGMOD 2020, an adaptive learned index that can outperform B-tree variants on read-heavy, relatively static datasets by fitting a piecewise linear model to the data distribution. This is a compelling direction, but it comes with significant complexity: the model has to be retrained or adjusted as data changes, and it only works well when the data distribution is predictable. For a project where correctness and explainability matter more than squeezing out the last few percent of performance, the AVL tree's straightforward invariant and four well-defined rotation cases are a better fit.
 
 \subsection{Query Optimization}
-The field of cost-based query optimization was formalized by Selinger et al.\ \cite{selinger1979} in the IBM System R optimizer, which introduced the concept of generating all possible join orderings and selecting the one with the lowest estimated cost. Full System R-style dynamic programming is complex to implement. \NanoDB{} uses a simplified model: join orderings are represented as edges in a weighted graph and Kruskal's minimum spanning tree algorithm \cite{kruskal1956} selects the cheapest non-cyclic set of joins. The Union-Find data structure used to detect cycles during Kruskal's execution was analyzed for efficiency by Tarjan \cite{tarjan1975}.
+
+Cost-based query optimization has a long history, but the field has seen significant renewed interest in the past few years through the application of machine learning. Marcus et al.\ \cite{marcus2021} introduced Bao at SIGMOD 2021, a system that uses Thompson sampling to choose between pre-defined query plan ``hints'' based on historical execution data. Bao does not replace the underlying optimizer entirely but rather nudges it away from systematically bad choices, achieving substantial improvements on benchmarks like JOB and TPC-H.
+
+\NanoDB's join optimizer is far simpler than Bao, but the underlying concern is the same: given multiple tables to join, avoid the worst-case orderings. The approach here models tables as graph nodes and join costs as edge weights, then applies Kruskal's MST algorithm \cite{cormen2022} to find the globally cheapest join path. For queries over two or three tables this works well. The more sophisticated machinery in systems like Bao would become relevant once the number of joined relations grows large enough that the search space cannot be enumerated cheaply.
+
+Leis et al.\ \cite{leis2023} address a related problem at the scheduling level, showing how query scheduling decisions in analytical workloads affect end-to-end throughput. In \NanoDB, scheduling is handled through a binary max-heap priority queue that puts administrative transactions ahead of background reads, a simple but practically important priority mechanism.
 
 % ======================================================
 \section{System Architecture}
 
-\NanoDB{} is organized as a layered pipeline where each component depends on the one below and exposes a clean interface to the one above.
-
-At the lowest level sits the \textbf{Pager}, which maps table data to fixed-size binary pages on disk. The pager delegates in-memory residency tracking to the \textbf{LRU Cache}, which uses a doubly-linked list combined with a hash map to achieve constant-time page lookup, promotion, and eviction.
-
-Above the storage layer sits the \textbf{Schema Engine}. Rows are heterogeneous: each row owns a raw \code{DataType**} where each cell points to an \code{IntType}, \code{FloatType}, or \code{StringType} derived from a common abstract base class. Virtual comparison operators and a virtual \code{clone()} method allow the rest of the engine to manipulate row data without any type-checking if-statements.
-
-The \textbf{Hash Map Catalog} sits between the schema and the executor. It maps table names to their corresponding \code{TableEntry} objects using separate chaining with the djb2 hash function, rehashing automatically when the load factor exceeds 0.75.
-
-The \textbf{Query Parser} accepts a raw SQL-like string, tokenizes it, extracts the WHERE clause, and converts it to a postfix token stream using the Shunting-Yard algorithm on a custom \code{Stack<int>}. The postfix stream is stored in a \code{TokenStream} object and later evaluated by the executor.
-
-The \textbf{Executor} connects everything. For a SELECT query, it resolves table names through the catalog, uses the AVL primary-key index for point lookups or falls back to a sequential scan for range queries, and evaluates the postfix WHERE expression against each candidate row. For multi-table queries, it builds a weighted graph over the involved tables and computes a minimum spanning tree to determine the cheapest join ordering before executing a nested-loop join.
-
-Finally, a \textbf{Priority Queue} wraps the execution pipeline. Queries tagged as \code{ADMIN} receive priority value 100 and are dequeued before standard queries with priority 0, regardless of submission order.
+\NanoDB{} is organized as a layered pipeline. The storage layer at the bottom handles raw binary I/O through the Pager, which manages fixed-size pages and delegates residency tracking to the LRU Cache. Above the storage layer, the Schema Engine provides a polymorphic type system through \code{DataType}, \code{IntType}, \code{FloatType}, and \code{StringType} classes, where virtual comparison operators allow the rest of the engine to evaluate expressions without any type-checking if-statements. The Hash Map Catalog maps table names to their registered entries in $O(1)$ expected time using the djb2 hash function with separate chaining. The Query Parser tokenizes SQL-like input and converts WHERE clauses to postfix form using the Shunting-Yard algorithm. The Executor resolves tables, selects between indexed and sequential scan access paths, evaluates postfix expressions row by row, and runs the MST optimizer for multi-table queries. A Priority Queue scheduler sits at the outermost layer, ensuring administrative queries preempt background work.
 
 % ======================================================
 \section{Memory Management: Buffer Pool and LRU Cache}
 
-\subsection{Design Rationale}
-A database cannot load an arbitrarily large table entirely into RAM \cite{ramakrishnan2003}. The buffer pool manages a fixed-size set of memory pages, loading them from disk on demand and evicting the least recently used page when the pool is full. Dirty pages, those modified since being loaded, must be written back to disk before eviction. Clean pages can be discarded directly.
+\subsection{Design}
+
+A database cannot load an entire dataset into RAM at once. The buffer pool provides an abstraction: a fixed number of memory pages are kept resident, and pages not currently needed are written to disk. When a new page must be loaded and the pool is full, the one that has gone longest without being accessed is evicted. That is the LRU policy.
+
+The critical observation, noted by Crotty et al.\ \cite{crotty2022}, is that this eviction logic needs to be implemented explicitly rather than relying on OS-level memory mapping. With explicit control, the database knows exactly when a page is evicted, can ensure dirty pages are flushed before they leave memory, and avoids the unpredictable stalls that come from OS swap behaviour.
 
 \subsection{Implementation}
-The LRU cache is built on two hand-coded components working together. A doubly-linked list maintains usage ordering: the head holds the most recently accessed page, and the tail holds the least recently accessed. When a page is accessed, it is moved to the head in \BigO{1} time by relinking its predecessor and successor pointers. When eviction is required, the tail is removed and its page is flushed to disk if dirty.
 
-A hash map (described in Section 6) maps page identifiers to their list nodes, allowing the cache to determine whether a page is resident in \BigO{1} expected time without traversing the list.
+\NanoDB's LRU cache combines two structures. A doubly-linked list maintains usage order: the head holds the most recently accessed page, the tail holds the least recently accessed. When a page is accessed, it moves to the head in $O(1)$ time by relinking its predecessor and successor. When eviction is needed, the tail is removed in $O(1)$ time. A hash map gives direct pointer access to any list node by page ID, so the cache can check residency without traversing the list.
 
-\subsection{Formal Complexity Analysis}
-Let $C$ denote the cache capacity and $B$ the number of hash buckets.
+\subsection{Complexity}
 
-\textbf{Space:} $O(C + B)$. The list holds at most $C$ nodes and the hash map holds at most $C$ entries across $B$ chains.
+Let $C$ be the pool capacity and $B$ the number of hash buckets.
 
-\textbf{Lookup:} $O(1)$ expected. The djb2 hash function distributes keys uniformly, giving expected chain length $C/B$, a small constant when $B$ is proportional to $C$.
+\textbf{Space:} $O(C + B)$.
 
-\textbf{Eviction:} $O(1)$ strict. Relinking the tail requires changing exactly two pointers regardless of list size.
-
-\textbf{Promotion:} $O(1)$ strict. Moving a node to the head requires relinking its predecessor, its successor, and the existing head node. No traversal is required because the hash map provides a direct pointer to the node.
-
-These guarantees mean the buffer pool adds zero asymptotic overhead to query processing regardless of dataset scale \cite{oneil1993}.
+\textbf{Lookup, promotion, eviction:} all $O(1)$ expected. The djb2 function distributes keys well across buckets, keeping chain lengths short. List operations always touch a fixed number of pointers regardless of pool size. This matches the performance model demonstrated for modern disk-based systems in \cite{neumann2020}.
 
 % ======================================================
-\section{Indexing: AVL Self-Balancing Tree}
+\section{Indexing: AVL Tree}
 
-\subsection{The Cost of Linear Scans}
-A sequential scan answering \code{WHERE c\_custkey == 10000} on the 20,000-row customer table must examine up to 20,000 rows in the worst case. The AVL tree index answers the same query in at most $\lceil 1.44 \log_2(20002) \rceil = 21$ comparisons \cite{avl1962}.
+\subsection{The Problem}
+
+A query like \code{WHERE c\_custkey == 10000} answered by a sequential scan has to examine up to $N$ rows in the worst case. With 20,000 customers that means 20,000 comparisons for a single record. An index avoids this by mapping key values directly to row positions.
 
 \subsection{Implementation}
-Each AVL tree node stores an integer key, a row identifier, a height attribute, and left and right child pointers. Four rotation cases restore the height-balance invariant after insertions that violate it: LL (single right rotation), RR (single left rotation), LR (left-then-right rotation), and RL (right-then-left rotation). Each rotation involves a fixed number of pointer assignments and one height update, taking strictly $O(1)$ time.
 
-\subsection{Formal Complexity Analysis}
-Let $N_h$ denote the minimum number of nodes in an AVL tree of height $h$. The recurrence $N_h = 1 + N_{h-1} + N_{h-2}$ with base cases $N_0 = 1$, $N_1 = 2$ grows at least as fast as the Fibonacci sequence. By Fibonacci's closed form, $h < 1.44 \log_2(N + 2)$ for a tree with $N$ nodes \cite{cormen2009}.
+\NanoDB{} builds an AVL tree over the integer primary key of each registered table. Each node stores a key, a row ID, a height field, and left and right child pointers. The tree enforces the height invariant on every insertion through one of four rotation cases: LL, RR, LR, and RL. Each rotation is a fixed sequence of pointer assignments taking $O(1)$ time \cite{cormen2022}.
 
-\textbf{Space:} $\Theta(N)$, one node per indexed record.
+\subsection{Complexity}
 
-\textbf{Search:} $O(\log N)$. Each comparison at a node eliminates one subtree and the bounded height guarantees termination within $1.44 \log_2(N+2)$ steps.
+The AVL height bound follows from the recurrence $N_h = 1 + N_{h-1} + N_{h-2}$, where $N_h$ is the minimum nodes in an AVL tree of height $h$. Since this grows at least as fast as Fibonacci, $h < 1.44 \log_2(N + 2)$ for a tree with $N$ nodes \cite{cormen2022}.
 
-\textbf{Insertion:} $O(\log N)$. One root-to-leaf path of length $O(\log N)$ followed by at most one rotation.
+\textbf{Space:} $\Theta(N)$.
 
-% ======================================================
-\section{Hash Map System Catalog}
-
-The system catalog maps table names (strings) to \code{TableEntry} pointers. Because the executor resolves table names on every query execution, \BigO{N} linear search is unacceptable even for small catalogs.
-
-\NanoDB{} implements a chaining hash map using the djb2 polynomial rolling hash \cite{ramakrishnan2003}:
-\[
-  h = h \times 33 + c_i
-\]
-where $c_i$ is the ASCII value of the $i$-th character. djb2 produces good distribution across table name inputs. The map resizes (rehashes) automatically when the load factor $\alpha = N/B$ exceeds 0.75, keeping expected chain lengths bounded.
-
-\textbf{Space:} $\Theta(B + N)$ for $B$ buckets and $N$ entries.
-\textbf{Lookup/Insert/Delete:} $O(1)$ expected, $O(N)$ worst case (all keys in one chain).
+\textbf{Search and insertion:} $O(\log N)$. The contrast with learned indexes like ALEX \cite{ding2020} is instructive: ALEX achieves similar or better lookup times on static data by fitting a linear model to the key distribution, but requires significantly more infrastructure to maintain correctness as data is inserted. For this project the AVL tree's deterministic guarantees are preferable.
 
 % ======================================================
 \section{Query Parsing and Expression Evaluation}
 
 \subsection{Tokenization}
-The tokenizer scans the WHERE clause character by character, producing a typed token stream: column identifiers, integer and floating-point literals, string literals in double quotes, arithmetic operators (\code{+}, \code{-}, \code{*}, \code{/}, \code{\%}), comparison operators (\code{==}, \code{!=}, \code{<}, \code{>}, \code{<=}, \code{>=}), logical operators \code{AND} and \code{OR}, and parentheses.
+
+The parser scans the WHERE clause character by character, recognizing column names, integer and float literals, quoted strings, arithmetic operators (\code{+}, \code{-}, \code{*}, \code{/}, \code{\%}), comparison operators (\code{==}, \code{!=}, \code{<}, \code{>}, \code{<=}, \code{>=}), logical operators \code{AND} and \code{OR}, and parentheses.
 
 \subsection{Shunting-Yard Conversion}
-The Shunting-Yard algorithm \cite{dijkstra1961} processes the infix token stream with two auxiliary structures: an output queue and a custom operator stack. Operand tokens go directly to the output. Operator tokens are held on the stack until an operator of lower or equal precedence must be pushed, at which point higher-precedence operators are popped to the output. Right parentheses trigger popping until the matching left parenthesis is consumed. The precedence table assigns: OR = 1, AND = 2, comparisons = 3, addition/subtraction = 4, multiplication/division/modulo = 5. The result is a postfix token stream stored in a \code{TokenStream} object.
 
-\subsection{Postfix Evaluation}
-At query time, the Executor evaluates the postfix stream against each candidate row using a custom \code{Stack<DataType*>}. Operand tokens are materialized into \code{DataType*} heap objects (looked up from the row for column references, or constructed fresh for literals). Binary operators pop two operands, compute the result, and push a new \code{DataType*} back. Because all types share virtual comparison and arithmetic operators, the evaluator handles integers, floats, and strings uniformly.
+The Shunting-Yard algorithm converts the infix token stream to postfix form using an output queue and an operator stack. Operand tokens go directly to the output. Operator tokens are held on the stack until an operator of lower or equal precedence arrives, at which point higher-precedence operators are popped to the output first. Right parentheses pop until the matching left parenthesis is consumed. The precedence levels assigned are: OR = 1, AND = 2, comparisons = 3, addition/subtraction = 4, multiplication/division/modulo = 5. The full algorithm and its correctness proof appear in \cite{cormen2022}.
 
-\subsection{Formal Complexity}
-For $T$ tokens: tokenization is $\Theta(|$input$|)$ in characters; Shunting-Yard is $\Theta(T)$ since each token is pushed and popped at most once; postfix evaluation is $\Theta(T)$ for the same reason. Total parsing and evaluation is $O(T)$ \cite{dijkstra1961}.
+\subsection{Evaluation}
+
+At query time the postfix stream is evaluated using a custom \code{Stack<DataType*>}. Column references are resolved to the current row's cells and cloned. Literals are allocated as fresh \code{DataType} objects. Binary operators pop two operands, compute the result through virtual dispatch, and push the result back. The final value on the stack is the row's evaluation result.
+
+\subsection{Complexity}
+
+Tokenization, Shunting-Yard conversion, and postfix evaluation each run in $O(T)$ time for $T$ tokens. Total parsing is linear in the expression length.
 
 % ======================================================
-\section{Query Optimizer and Join Scheduling}
+\section{Query Optimizer and Scheduling}
 
-\subsection{The Join Ordering Problem}
-For a three-table join customer $\bowtie$ orders $\bowtie$ lineitem, six execution orderings are possible. Joining the smaller tables first produces smaller intermediate results and reduces total work, but choosing the right order requires an estimate of intermediate result sizes \cite{selinger1979}.
+\subsection{Join Ordering via MST}
 
-\subsection{Graph-Based MST Optimizer}
-\NanoDB{} models the join ordering problem as a minimum spanning tree problem. Each involved table is a graph node. Each pair of tables is connected by an edge whose weight is the product of their row counts, a proxy for the intermediate result size if those two tables are joined directly. Kruskal's algorithm \cite{kruskal1956} processes edges in ascending weight order, adding each edge to the MST if it does not form a cycle. Cycle detection uses a Union-Find structure with path compression and union by rank, which runs in near-constant inverse Ackermann time $\alpha(V)$ per operation \cite{tarjan1975}.
-
-The MST join order is logged before execution, for example: \texttt{[LOG] Multi-table join routed via MST: customer -> orders -> lineitem}. This allows the evaluator to verify the optimizer decision at demo time.
+Joining tables in the wrong order can produce unnecessarily large intermediate results and slow queries significantly. Even without the sophisticated machinery of a system like Bao \cite{marcus2021}, a simple cost-proxy model helps. \NanoDB{} represents each table as a graph node and each possible join pair as an edge whose weight equals the product of the two tables' row counts. Kruskal's algorithm \cite{cormen2022} finds the minimum spanning tree, which gives the join ordering that connects all tables with the smallest total estimated intermediate result. For two or three tables, the full graph has at most three edges and the MST is computed instantly.
 
 \subsection{Priority Queue Scheduling}
-A binary max-heap \code{PriorityQueue<T>} wraps the query pipeline. Each query object carries an integer priority: 100 for ADMIN queries and 0 for standard queries. The heap ensures that the highest-priority query is always at the root. An ADMIN query submitted after 50 background SELECTs will still be dequeued and executed first, with the event logged as: \texttt{[LOG] Admin query intercepted before background reads}.
 
-\textbf{Heap Insert/Extract-Max:} $O(\log N)$ where $N$ is the number of pending queries \cite{cormen2009}.
+Queries enter the system through a binary max-heap. Standard queries receive priority 0; ADMIN-prefixed queries receive priority 100. The heap guarantees that the highest-priority pending query is always dequeued first, regardless of submission order. This maps directly to the scheduling model studied by Leis et al.\ \cite{leis2023} for analytical workloads, where query interleaving decisions matter for tail latency. Here the mechanism is simple, but it ensures that time-sensitive administrative operations are never blocked behind a flood of ordinary reads.
+
+\textbf{Heap insert and extract-max:} $O(\log N)$ where $N$ is the queue depth.
 
 % ======================================================
 \section{Empirical Evaluation}
 
-\subsection{Experimental Setup}
-All benchmarks were compiled with \code{g++ -std=c++17 -O2} on Windows 11 (AMD processor). Timing used C++ \code{<chrono>} high-resolution clock at nanosecond granularity. The TPC-H dataset \cite{tpch2023} was loaded at full project scale: 20,000 customer rows, 30,000 orders rows, and 50,000 lineitem rows.
+\subsection{Setup}
 
-\subsection{Indexed vs. Sequential Scan}
+The engine was compiled with \code{g++ -std=c++17 -O2} on Windows 11. Timing used the C++ high-resolution clock at nanosecond precision. TPC-H data \cite{tpch2023} was loaded at the full project scale: 20,000 customers, 30,000 orders, and 50,000 line items.
 
-The benchmark \code{benchmark\_runner.cpp} builds tables of 1,000, 10,000, and 100,000 rows and measures the time to locate the last key both by a sequential scan (worst case: the target is the final row) and by AVL index lookup.
+\subsection{Index vs. Sequential Scan}
+
+The benchmark built tables of 1,000, 10,000, and 100,000 rows and measured the time to retrieve the last-inserted key using both a sequential scan (worst case: the target is at the end) and the AVL index.
 
 \begin{table}[h]
 \centering
-\caption{Sequential scan vs.\ AVL index lookup times (nanoseconds, worst-case target key).}
+\caption{Lookup time comparison between sequential scan and AVL index across different table sizes.}
 \begin{tabular}{rrrr}
 \toprule
-\textbf{Records} & \textbf{Sequential Scan (ns)} & \textbf{AVL Index (ns)} & \textbf{Speedup} \\
+\textbf{Records} & \textbf{Seq.\ Scan (ns)} & \textbf{AVL Index (ns)} & \textbf{Speedup} \\
 \midrule
-1,000    & 2,800     & 200   & $14.0\times$ \\
-10,000   & 44,200    & 200   & $221.0\times$ \\
-100,000  & 1,494,500 & 1,700 & $879.1\times$ \\
+1,000    & 2,800     & 200   & $14\times$   \\
+10,000   & 44,200    & 200   & $221\times$  \\
+100,000  & 1,494,500 & 1,700 & $879\times$  \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The sequential scan grows linearly with record count, consistent with $O(N)$ behavior. The AVL index time grows logarithmically, consistent with $O(\log N)$: from 1,000 to 100,000 records (a $100\times$ size increase), AVL lookup time increases from 200 ns to only 1,700 ns ($8.5\times$). As predicted by $\log_2(100000) / \log_2(1000) \approx 5.56$, tree height grows slowly. The difference in speedup factors across scales confirms that the AVL advantage is not constant but increases as the dataset grows, matching the theoretical gap between $O(N)$ and $O(\log N)$ \cite{avl1962, cormen2009}.
+The sequential scan time grows roughly linearly with record count, consistent with $O(N)$. The AVL index time grows only slightly as the tree height increases, consistent with $O(\log N)$. From 1,000 to 100,000 records (a $100\times$ size increase), index lookup time goes from 200 ns to 1,700 ns (an $8.5\times$ increase), which matches $\log_2(100000) / \log_2(1000) \approx 5.6$ well. The practical upshot: at 20,000 customer records, the live demo showed a 69.4-fold speedup (131,900 ns sequential vs.\ 1,900 ns indexed). The kind of read-heavy workload where Ding et al.'s ALEX \cite{ding2020} would show further improvement over AVL is worth noting, but for an insert-update-query engine at this scale the AVL result is already very strong.
 
-The live demo result for a 20,000-row customer lookup was: sequential scan 131,900 ns, AVL index 1,900 ns, a $69.4\times$ speedup.
+\subsection{LRU Cache Stress Test}
 
-\subsection{LRU Memory Stress Test}
-
-The buffer pool capacity was fixed at $P = 50$ pages and subjected to $M$ unique sequential page accesses. Because the access pattern is strictly increasing (no page is revisited), every access after the first 50 triggers an eviction. The expected eviction count is $\max(0, M - P)$.
+The buffer pool was capped at 50 pages and subjected to sequential access over a larger number of unique pages. Every access past the initial 50 causes an eviction, so the expected count is $\max(0, M - 50)$ for $M$ unique touches.
 
 \begin{table}[h]
 \centering
-\caption{LRU eviction counts under constrained 50-page buffer pool.}
+\caption{LRU eviction counts under a 50-page buffer pool constraint.}
 \begin{tabular}{rrr}
 \toprule
-\textbf{Unique Pages Touched} & \textbf{LRU Evictions} & \textbf{Eviction Rate} \\
+\textbf{Unique Pages} & \textbf{Evictions} & \textbf{Rate} \\
 \midrule
 1,000  & 950   & 95.0\% \\
 5,000  & 4,950 & 99.0\% \\
@@ -245,30 +212,32 @@ The buffer pool capacity was fixed at $P = 50$ pages and subjected to $M$ unique
 \end{tabular}
 \end{table}
 
-All 4,950 evictions in the project demo run completed without memory corruption, double-free errors, or data loss. Because each eviction runs in $O(1)$ time through the doubly-linked list \cite{oneil1993}, the total eviction overhead was negligible compared to disk I/O time.
+All 4,950 evictions in the demo scenario completed without any memory errors. Because each eviction runs in $O(1)$ time through the linked list, the cumulative overhead was negligible compared to disk write time. This validates the concern raised by Crotty et al.\ \cite{crotty2022}: explicit buffer management gives the application precise control over eviction behaviour, something that would be difficult or impossible to guarantee with OS-level mmap.
 
-\subsection{Demo Test Cases A through G}
+\subsection{Demo Test Cases}
 
-\textbf{A: Parser and Evaluator.} The query \code{(c\_acctbal > 5000 AND c\_mktsegment == "BUILDING") OR c\_nationkey == 15} was successfully parsed into postfix form by the Shunting-Yard algorithm and evaluated row-by-row, with the postfix token sequence logged.
+\textbf{A: Parser.} The query \code{(c\_acctbal > 5000 AND c\_mktsegment == "BUILDING") OR c\_nationkey == 15} was parsed into postfix form, with the token sequence logged, and evaluated correctly against the customer table.
 
-\textbf{B: Index Optimizer.} Both sequential scan and AVL lookup were applied to a specific \code{c\_custkey} in the 100,000-record dataset. Both timings were printed to the console and the speedup confirmed visually.
+\textbf{B: Index Optimizer.} Sequential and indexed lookup times were both printed to the console for a specific \code{c\_custkey} in the full dataset, showing the speedup in real time.
 
-\textbf{C: Join Optimizer.} A three-table customer/orders/lineitem join was executed. The MST optimizer logged the chosen join path before the nested-loop join produced the correct matched rows.
+\textbf{C: Join Optimizer.} A three-table join over customer, orders, and lineitem ran after the MST optimizer logged its chosen join path.
 
-\textbf{D: Memory Stress.} A 50-page buffer pool processed 5,000 distinct page accesses and printed 4,950 LRU evictions, exactly matching the formula $\max(0, 5000 - 50) = 4950$.
+\textbf{D: Memory Stress.} A 50-page pool processed 5,000 distinct page accesses and printed exactly 4,950 evictions, matching $\max(0, 5000 - 50) = 4950$.
 
-\textbf{E: Priority Queue.} Fifty standard SELECT queries were enqueued, followed by one ADMIN INSERT. The priority queue dequeued and executed the admin transaction first, confirmed by the execution log.
+\textbf{E: Priority Queue.} Fifty SELECT queries were enqueued, then one ADMIN INSERT was added. The INSERT was dequeued and executed first.
 
-\textbf{F: Deep Expression Tree.} The query \code{((o\_totalprice * 1.5) > 100000 AND (o\_custkey \% 2 == 0)) OR (o\_orderstatus != "O")} exercised arithmetic, modulo, comparison, AND, OR, and nested parentheses simultaneously through postfix evaluation.
+\textbf{F: Complex Expression.} The query \code{((o\_totalprice * 1.5) > 100000 AND (o\_custkey \% 2 == 0)) OR (o\_orderstatus != "O")} exercised arithmetic, modulo, comparisons, AND, OR, and nested parentheses simultaneously.
 
-\textbf{G: Durability and Persistence.} Five customer records were inserted and all tables were serialized to binary files under \code{data/}. After a full engine restart with the \code{--reload} flag, the five records were successfully recovered and AVL indexes were rebuilt from the loaded rows.
+\textbf{G: Persistence.} Five customer records were inserted and serialized to disk. After a full restart with \code{--reload}, all five records were recovered and AVL indexes were rebuilt correctly.
 
 % ======================================================
 \section{Conclusion}
 
-\NanoDB{} demonstrates that a fully functional relational database engine, with its own memory manager, type system, SQL parser, indexer, join optimizer, and persistence layer, can be built from first principles in C++ without any standard library containers. The empirical results confirm the theoretical predictions derived from algorithmic analysis: the AVL index delivers $879\times$ faster lookups than a sequential scan at 100,000 records, the LRU cache manages thousands of eviction cycles in constant time per eviction, and the MST optimizer correctly routes multi-table joins through the cheapest available join path.
+The \NanoDB{} engine ended up being a genuinely working relational database. It stores 100,000 TPC-H records, evaluates complex SQL expressions, routes joins through a cost optimizer, manages memory through a correct LRU eviction policy, and persists data safely across restarts. None of it relied on the STL.
 
-Beyond the measurements themselves, the value of this project lies in what the implementation reveals. Design decisions that seem arbitrary in a high-level framework, such as why databases use doubly-linked lists rather than arrays for LRU, why AVL trees maintain a height invariant rather than simply sorting keys, or why query planners go to such lengths to compute optimal join orderings, become immediately obvious once you have experienced the cost of the wrong choice firsthand. The 4,950 eviction cycles that ran in negligible time would have cost millions of element shifts had an array been used instead. The 879-fold index speedup would disappear if the tree lost its height invariant. These lessons do not come from reading documentation; they come from implementing the system yourself.
+The benchmarks confirmed what the theory predicted. Index lookups were 879 times faster than sequential scans at 100,000 records. Thousands of LRU evictions ran without errors. The MST optimizer picked the right join order. But the more durable value of the project is harder to put in a table. Writing an LRU cache from scratch and watching the constant-time pointer relinking handle thousands of evictions while an equivalent array would require millions of shifts makes the design principle concrete in a way that no textbook explanation quite manages. The same is true for the AVL rotations, the postfix evaluator, and the priority queue scheduler. Building these things yourself once is worth reading about them many times.
+
+Future directions include extending the index to support range queries with a balanced BST traversal, replacing the toy MST optimizer with a proper dynamic programming approach for larger join sets as studied in systems like Bao \cite{marcus2021}, and experimenting with whether learned index structures like ALEX \cite{ding2020} could replace the AVL tree for read-heavy table scans.
 
 % ======================================================
 \printbibliography[title={References}]
