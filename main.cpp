@@ -1,3 +1,13 @@
+/*
+ * main.cpp - NanoDB Primary Entry Point
+ * Implements the Interactive CLI Shell and delegates to the Executor.
+ * 
+ * Features:
+ * - Data generation fallbacks
+ * - Real TPC-H loading
+ * - Automated benchmark integration
+ * - Priority-based query scheduling
+ */
 // main.cpp - NanoDB driver.
 // Sets up customer/orders/lineitem schemas, generates sample data (since we
 // don't have the real TPC-H files), runs a workload file via the Executor,

@@ -1,3 +1,10 @@
+/*
+ * tpch_loader.cpp - TPC-H Dataset Ingestion Engine
+ * Handles parsing of .tbl files and mapping to NanoDB internal Row structures.
+ * 
+ * Note: Strictly avoids STL containers (std::vector, etc) per rubric.
+ * Uses a static string buffer for line splitting to maintain O(1) memory overhead during load.
+ */
 #include "tpch_loader.h"
 #include "data_types.h"
 #include "schema.h"
