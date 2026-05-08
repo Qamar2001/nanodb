@@ -106,7 +106,33 @@ static void demoIndexedVsScan(Executor *ex) {
   if (!c || !ce)
     return;
 
-  int targetKey = c->numRows / 2; // something that exists
+  int minKey = 1;
+  int maxKey = c->numRows;
+
+  // Ask user for a valid target key at runtime
+  int targetKey = -1;
+  while (true) {
+    std::cout << "  Enter target c_custkey to search [" << minKey << " - " << maxKey << "]: ";
+    std::string input;
+    std::getline(std::cin, input);
+    try {
+      int val = std::stoi(input);
+      if (val >= minKey && val <= maxKey) {
+        targetKey = val;
+        break;
+      } else {
+        std::cout << "  [Error] Value out of range. Valid range is " << minKey << " to " << maxKey << ".\n";
+        std::cout << "  Examples: " << minKey << ", "
+                  << maxKey / 2 << ", "
+                  << maxKey << "\n";
+      }
+    } catch (...) {
+      std::cout << "  [Error] Not a valid integer. Please enter a number.\n";
+      std::cout << "  Examples: " << minKey << ", "
+                << maxKey / 2 << ", "
+                << maxKey << "\n";
+    }
+  }
 
   // Sequential scan
   auto t1 = std::chrono::high_resolution_clock::now();
@@ -134,10 +160,12 @@ static void demoIndexedVsScan(Executor *ex) {
   std::cout << "  target c_custkey = " << targetKey << "\n";
   std::cout << "  sequential scan: " << seqNs << " ns  (rowId=" << foundSeq
             << ")\n";
-  std::cout << "  AVL index     : " << idxNs << " ns  (rowId=" << foundIdx
-            << ")\n";
+  std::cout << "  AVL index     : " << (idxNs > 0 ? std::to_string(idxNs) + " ns" : "< 1 ns")
+            << "  (rowId=" << foundIdx << ")\n";
   if (idxNs > 0)
     std::cout << "  speedup       : " << (double)seqNs / (double)idxNs << "x\n";
+  else if (seqNs > 0)
+    std::cout << "  speedup       : >" << seqNs << "x  (AVL lookup sub-nanosecond)\n";
   if (g_logger) {
     g_logger->log("Sequential scan for c_custkey=" + std::to_string(targetKey) +
                   " took " + std::to_string(seqNs) + " ns");
@@ -231,7 +259,7 @@ int main(int argc, char **argv) {
   g_logger->section("NanoDB starting");
 
   Executor *ex = new Executor();
-  int customerN = 20000, ordersN = 30000, lineitemN = 50000;
+  int customerN = 100000, ordersN = 150000, lineitemN = 300000;
 
   bool running = true;
   bool dataLoaded = false;
