@@ -1,7 +1,7 @@
 /*
  * main.cpp - NanoDB Primary Entry Point
  * Implements the Interactive CLI Shell and delegates to the Executor.
- * 
+ *
  * Features:
  * - Data generation fallbacks
  * - Real TPC-H loading
@@ -112,7 +112,8 @@ static void demoIndexedVsScan(Executor *ex) {
   // Ask user for a valid target key at runtime
   int targetKey = -1;
   while (true) {
-    std::cout << "  Enter target c_custkey to search [" << minKey << " - " << maxKey << "]: ";
+    std::cout << "  Enter target c_custkey to search [" << minKey << " - "
+              << maxKey << "]: ";
     std::string input;
     std::getline(std::cin, input);
     try {
@@ -121,15 +122,14 @@ static void demoIndexedVsScan(Executor *ex) {
         targetKey = val;
         break;
       } else {
-        std::cout << "  [Error] Value out of range. Valid range is " << minKey << " to " << maxKey << ".\n";
-        std::cout << "  Examples: " << minKey << ", "
-                  << maxKey / 2 << ", "
+        std::cout << "  [Error] Value out of range. Valid range is " << minKey
+                  << " to " << maxKey << ".\n";
+        std::cout << "  Examples: " << minKey << ", " << maxKey / 2 << ", "
                   << maxKey << "\n";
       }
     } catch (...) {
       std::cout << "  [Error] Not a valid integer. Please enter a number.\n";
-      std::cout << "  Examples: " << minKey << ", "
-                << maxKey / 2 << ", "
+      std::cout << "  Examples: " << minKey << ", " << maxKey / 2 << ", "
                 << maxKey << "\n";
     }
   }
@@ -160,12 +160,14 @@ static void demoIndexedVsScan(Executor *ex) {
   std::cout << "  target c_custkey = " << targetKey << "\n";
   std::cout << "  sequential scan: " << seqNs << " ns  (rowId=" << foundSeq
             << ")\n";
-  std::cout << "  AVL index     : " << (idxNs > 0 ? std::to_string(idxNs) + " ns" : "< 1 ns")
+  std::cout << "  AVL index     : "
+            << (idxNs > 0 ? std::to_string(idxNs) + " ns" : "< 1 ns")
             << "  (rowId=" << foundIdx << ")\n";
   if (idxNs > 0)
     std::cout << "  speedup       : " << (double)seqNs / (double)idxNs << "x\n";
   else if (seqNs > 0)
-    std::cout << "  speedup       : >" << seqNs << "x  (AVL lookup sub-nanosecond)\n";
+    std::cout << "  speedup       : >" << seqNs
+              << "x  (AVL lookup sub-nanosecond)\n";
   if (g_logger) {
     g_logger->log("Sequential scan for c_custkey=" + std::to_string(targetKey) +
                   " took " + std::to_string(seqNs) + " ns");
@@ -281,19 +283,22 @@ int main(int argc, char **argv) {
     std::cout << "Select an option: ";
 
     std::string choice;
-    if (!std::getline(std::cin, choice)) break;
+    if (!std::getline(std::cin, choice))
+      break;
 
     if (choice == "1") {
       if (!dataLoaded) {
-        bool loaded = loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
+        bool loaded =
+            loadTpchData(ex, "../Datset TPL-H", customerN, ordersN, lineitemN);
         if (loaded) {
           std::cout << "-- Successfully loaded real TPC-H dataset.\n";
           dataLoaded = true;
         } else {
-          std::cout << "-- [Error] Could not load TPC-H dataset from '../Datset TPL-H'.\n";
+          std::cout << "-- [Error] Could not load TPC-H dataset from "
+                       "'../Datset TPL-H'.\n";
         }
       } else {
-         std::cout << "-- Data already loaded.\n";
+        std::cout << "-- Data already loaded.\n";
       }
     } else if (choice == "2") {
       if (!dataLoaded) {
@@ -303,35 +308,45 @@ int main(int argc, char **argv) {
         std::cout << "-- Loaded dummy data.\n";
         dataLoaded = true;
       } else {
-         std::cout << "-- Data already loaded.\n";
+        std::cout << "-- Data already loaded.\n";
       }
     } else if (choice == "3") {
-      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
-      else runWorkload(ex, "queries.txt");
+      if (!dataLoaded)
+        std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else
+        runWorkload(ex, "queries.txt");
     } else if (choice == "4") {
-      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
-      else demoIndexedVsScan(ex);
+      if (!dataLoaded)
+        std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else
+        demoIndexedVsScan(ex);
     } else if (choice == "5") {
       demoLruStress();
     } else if (choice == "6") {
-      if (!dataLoaded) std::cout << "-- Please load data first (Option 1 or 2).\n";
-      else demoPriorityQueue(ex);
+      if (!dataLoaded)
+        std::cout << "-- Please load data first (Option 1 or 2).\n";
+      else
+        demoPriorityQueue(ex);
     } else if (choice == "7") {
       if (!dataLoaded) {
-         std::cout << "-- Warning: No data loaded. Some queries may fail.\n";
+        std::cout << "-- Warning: No data loaded. Some queries may fail.\n";
       }
       std::cout << "\n--- Interactive SQL Shell ---\n";
       std::cout << "Type 'EXIT' or 'QUIT' to return to menu.\n";
       while (true) {
         std::cout << "SQL> ";
         std::string query;
-        if (!std::getline(std::cin, query)) break;
-        if (query.empty()) continue;
-        
+        if (!std::getline(std::cin, query))
+          break;
+        if (query.empty())
+          continue;
+
         std::string upperQ = query;
-        for (char& c : upperQ) c = toupper((unsigned char)c);
-        if (upperQ == "EXIT" || upperQ == "QUIT") break;
-        
+        for (char &c : upperQ)
+          c = toupper((unsigned char)c);
+        if (upperQ == "EXIT" || upperQ == "QUIT")
+          break;
+
         Statement *s = parseStatement(query);
         ex->execute(s);
         delete s;
