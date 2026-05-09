@@ -155,13 +155,3 @@ Operator precedence handled by the Shunting-Yard algorithm.
   ```
 
 ---
-
-## Final Submission Checklist
-
-- [x] Zero STL containers used in core engine.
-- [x] TPC-H 100,000 record dataset supported.
-- [x] AVL Indexing speedup verified.
-- [x] LRU Cache eviction logic verified (O(1)).
-- [x] Kruskal MST Join Optimization logged.
-- [x] Persistence and `--reload` tested.
-- [x] Research Report finalized (9 pages).
